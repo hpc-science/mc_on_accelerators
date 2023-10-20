@@ -1,0 +1,73 @@
+// For each particle:
+//  - local xs calculation for local nuclides
+//  - call rowreduce
+// data dimensions
+param N_XS: i16;
+param N_PARTICLES_PER_ROW: i16;
+param N_PARTICLE_BATCHES: i16;
+param N_NUCLIDES: i16;
+param N_GRID_POINTS_PER_NUCLIDE: i16;
+
+// tile dimensions
+param width: i16;
+param height: i16;
+
+const C0: color = @get_color(0);
+const C1: color = @get_color(1);
+const C2: color = @get_color(2);
+const C3: color = @get_color(3);
+const C4: color = @get_color(4);
+const C5: color = @get_color(5);
+const C6: color = @get_color(6);
+const C7: color = @get_color(7);
+const C8: color = @get_color(8);
+const C9: color = @get_color(9);
+
+const ENTRY_REDUCE_1: color = @get_color(11);
+const ENTRY_REDUCE_2: color = @get_color(12);
+const ENTRY_REDUCE_3: color = @get_color(13);
+const ENTRY_REDUCE_4: color = @get_color(14);
+
+const memcpy = @import_module("<memcpy_multi/get_params>", .{
+  .width = width,
+  .height = height
+});
+
+const reduce = @import_module("allreduce/layout.csl", .{
+  .colors = [1]color{C8},
+  .entrypoints = [4]color{ENTRY_REDUCE_1, ENTRY_REDUCE_2, ENTRY_REDUCE_3, ENTRY_REDUCE_4},
+  .width = width,
+  .height = height
+});
+
+layout {
+  // PE coordinates are (column, row)
+  @set_rectangle(width, height);
+  for (@range(i16, width)) |x| {
+    for (@range(i16, height)) |y| {
+      @set_tile_code(x, y, "pe_program.csl", .{
+        .memcpy_params = memcpy.get_params(x),
+        .reduce_params = reduce.get_params(x, y),
+        .N_XS = N_XS,
+        .N_PARTICLES = N_PARTICLES_PER_ROW,
+        .N_PARTICLE_BATCHES = N_PARTICLE_BATCHES,
+        .N_NUCLIDES = N_NUCLIDES / width,
+        .N_GRID_POINTS_PER_NUCLIDE = N_GRID_POINTS_PER_NUCLIDE
+      });
+    }
+  }
+
+  // export symbol names
+  @export_name("P", [*]f32, true);
+  @export_name("Pxs", [*]f32, true);
+  @export_name("D", [*]f32, true);
+  @export_name("XS", [*]f32, true);
+  @export_name("NRG", [*]f32, true);
+  @export_name("ts_start", [*]u16, true);
+  @export_name("ts_done", [*]u16, true);
+  @export_name("ts_xsstart", [*]u16, true);
+  @export_name("ts_xsdone", [*]u16, true);
+  @export_name("ts_reducestart", [*]u16, true);
+  @export_name("ts_reducedone", [*]u16, true);
+  @export_name("compute", fn()void);
+}

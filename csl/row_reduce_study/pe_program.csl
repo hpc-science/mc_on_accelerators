@@ -1,0 +1,177 @@
+param memcpy_params: comptime_struct;
+param reduce_params: comptime_struct;
+
+// data structure dims
+param N_PARTICLES: i16;
+param N_PARTICLE_BATCHES : i16;
+param N_XS: i16;
+param N_NUCLIDES: i16;
+param N_GRID_POINTS_PER_NUCLIDE: i16;
+
+const BATCH_SIZE : i16 = N_PARTICLES / N_PARTICLE_BATCHES;
+
+const LAUNCH: color = @get_color(9);
+
+const trace = @import_module("<debug>", .{.buffer_size = 100});
+
+// memcpy module provides infrastructure for copying data
+// and launching functions from the host
+const sys_mod = @import_module("<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
+  .LAUNCH = LAUNCH,
+  .data_type = f32
+}));
+
+const reduce_mod = @import_module("allreduce/pe.csl", @concat_structs(reduce_params, .{
+  .f_callback = step_done,
+  .MAX_ZDIM = N_XS * BATCH_SIZE,
+  .queues = [1]u16{1},
+  .dest_dsr_ids = [1]u16{1},
+  .src0_dsr_ids = [1]u16{1},
+  .src1_dsr_ids = [1]u16{1}
+}));
+
+const tsc = @import_module("<time>");
+
+// Make an array holding the two timetamps (start and stop).
+// Timestamps in CSL are very weird, being 48-bits via an array of
+// three 16 bit unsigned ints. We do some math back on the host
+// to convert the cycle count into an actual cycle count.
+var ts_start = [3] u16 {0, 0, 0};
+var ts_done = [3] u16 {0, 0, 0};
+var ts_xsstart : [3 * N_PARTICLE_BATCHES] u16;
+var ts_xsdone : [3 * N_PARTICLE_BATCHES] u16;
+var ts_reducestart : [3 * N_PARTICLE_BATCHES] u16;
+var ts_reducedone : [3 * N_PARTICLE_BATCHES] u16;
+var ts_start_p: [*] u16 = &ts_start;
+var ts_done_p: [*] u16 = &ts_done;
+var ts_xsstart_p: [*] u16 = &ts_xsstart;
+var ts_xsdone_p: [*] u16 = &ts_xsdone;
+var ts_reducestart_p: [*] u16 = &ts_reducestart;
+var ts_reducedone_p: [*] u16 = &ts_reducedone;
+
+var P: [N_PARTICLES]f32;
+var Pxs: [N_PARTICLES * N_XS]f32;
+var D: [N_NUCLIDES]f32;
+var XS: [N_NUCLIDES*N_GRID_POINTS_PER_NUCLIDE*N_XS]f32;
+var NRG: [N_NUCLIDES*N_GRID_POINTS_PER_NUCLIDE]f32;
+
+// DSD for accessing energy of each particle in P
+//var P_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_PARTICLES} -> P[i*(N_XS+1)] });
+
+// ptrs to advertised as symbols to host
+var P_ptr: [*]f32 = &P;
+var Pxs_ptr: [*]f32 = &Pxs;
+var D_ptr: [*]f32 = &D;
+var XS_ptr: [*]f32 = &XS;
+var NRG_ptr: [*]f32 = &NRG;
+
+var current_batch : i16 = 0;
+
+fn particle_xs_lookup(b : i16) void  {
+  for (@range(i16, b * BATCH_SIZE, (b + 1) * BATCH_SIZE, 1)) |i| {
+    var energy: f32 = P[i];
+    for (@range(i16, N_XS)) |k| {
+      Pxs[i * N_XS + k] = 0.0;
+    }
+    for (@range(i16, N_NUCLIDES)) |j| {
+      var density: f32 = D[j];
+      var lower_idx : i16 = iterative_binary_search(&NRG, N_GRID_POINTS_PER_NUCLIDE,
+                                                    j, energy);
+      var e_lower : f32 = NRG[j * N_GRID_POINTS_PER_NUCLIDE + lower_idx];
+      var e_higher : f32 = NRG[j * N_GRID_POINTS_PER_NUCLIDE + lower_idx + 1];
+      var f : f32 = (e_higher - energy) / (e_higher - e_lower);
+
+      for (@range(i16, N_XS)) |k| {
+        var xs_low : f32 = XS[j * N_GRID_POINTS_PER_NUCLIDE * N_XS + lower_idx * N_XS + k];
+        var xs_high : f32 = XS[j * N_GRID_POINTS_PER_NUCLIDE * N_XS + (lower_idx+1) * N_XS + k];
+        Pxs[i * N_XS + k] += density * (xs_high - f * (xs_high - xs_low));
+      }
+    }
+  }
+}
+
+// FP32 lower bound binary search function
+// Returns the lower bound index of the value in array "nrg_grid" that
+// is immediately below the energy value
+fn iterative_binary_search(nrg_grid : [*]f32, n_grid_points_per_nuclide : i16,
+                           nuclide : i16, energy : f32) i16 {
+  var lowerLimit : i16 = 0;
+  var upperLimit : i16 = n_grid_points_per_nuclide - 1;
+  var offset : i16 = nuclide * n_grid_points_per_nuclide;
+  var examinationPoint : i16;
+  var length : i16 = upperLimit - lowerLimit;
+
+  while (length > 1) {
+    examinationPoint = lowerLimit + (length / 2);
+
+    if (nrg_grid[offset + examinationPoint] > energy) {
+      upperLimit = examinationPoint;
+    } else {
+      lowerLimit = examinationPoint;
+    }
+    length = upperLimit - lowerLimit;
+  }
+
+  return lowerLimit;
+}
+
+// Call initialize and gemv functions
+fn compute() void {
+  tsc.enable_tsc();
+  tsc.get_timestamp(&ts_start);
+  trace.trace_timestamp();
+
+  tsc.get_timestamp(@ptrcast(*[3]u16, &ts_xsstart[3 * current_batch]));
+  particle_xs_lookup(0);
+  tsc.get_timestamp(@ptrcast(*[3]u16, &ts_xsdone[3 * current_batch]));
+  trace.trace_timestamp();
+
+  reduce_compute_step(0);
+}
+
+fn reduce_compute_step(b : i16) void {
+  var P_sub_ptr: *[N_XS * BATCH_SIZE]f32;
+
+  // launch reduce for current batch
+  // sum result to right-most PE, current particle only
+  P_sub_ptr = @ptrcast(*[N_XS * BATCH_SIZE]f32, &Pxs[b * BATCH_SIZE * N_XS]);
+  tsc.get_timestamp(@ptrcast(*[3]u16, &ts_reducestart[3 * current_batch]));
+  reduce_mod.rowreduce(N_XS * BATCH_SIZE, P_sub_ptr);
+
+  // concurrently launch xs lookup for next batch, unless we
+  // just reduced the last block
+  if (b + 1 < N_PARTICLE_BATCHES) {
+    tsc.get_timestamp(@ptrcast(*[3]u16, &ts_xsstart[3 * (current_batch + 1)]));
+    particle_xs_lookup(b + 1);
+    tsc.get_timestamp(@ptrcast(*[3]u16, &ts_xsdone[3 * (current_batch + 1)]));
+  }
+}
+
+fn step_done() void {
+  tsc.get_timestamp(@ptrcast(*[3]u16, &ts_reducedone[3 * current_batch]));
+  //trace.trace_timestamp();
+  current_batch += 1;
+  if (current_batch >= N_PARTICLE_BATCHES) {
+    trace.trace_timestamp();
+    tsc.get_timestamp(&ts_done);
+    sys_mod.unblock_cmd_stream();
+  } else {
+    reduce_compute_step(current_batch);
+  }
+}
+
+comptime {
+  @export_symbol(P_ptr, "P");
+  @export_symbol(Pxs_ptr, "Pxs");
+  @export_symbol(D_ptr, "D");
+  @export_symbol(XS_ptr, "XS");
+  @export_symbol(NRG_ptr, "NRG");
+  @export_symbol(ts_start_p, "ts_start");
+  @export_symbol(ts_done_p, "ts_done");
+  @export_symbol(ts_xsstart_p, "ts_xsstart");
+  @export_symbol(ts_xsdone_p, "ts_xsdone");
+  @export_symbol(ts_reducestart_p, "ts_reducestart");
+  @export_symbol(ts_reducedone_p, "ts_reducedone");
+  @export_symbol(compute);
+  @rpc(LAUNCH);
+}
