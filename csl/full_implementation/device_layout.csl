@@ -1,0 +1,186 @@
+/////////////////////////////////////////////////////////////////////
+// Simulation Parameters (set in the .sh launch script)
+/////////////////////////////////////////////////////////////////////
+
+// Dimensions of our computationl PE grid
+param width: i16;
+param height: i16;
+
+param tile_width: i16;
+param tile_height: i16;
+
+// Number of particles that will begin on each PE
+param n_starting_particles_per_pe: i16;
+
+// Num nuclides per PE (note: total number of nuclides is
+// going to be n_nuclides * width)
+param n_nuclides: i16;
+
+// Num energy levels per nuclide
+param n_gridpoints_per_nuclide: i16;
+
+// Num xs reaction channels
+param n_xs: i16;
+
+param particle_buffer_multiplier: u16;
+
+// We will use three different colors for transferring data.
+// Two will handle the typical neighbor exchanges, while
+// a third will handle the periodic boundary case.
+
+// Colors for round robin row exchange
+const row_even_send_color: color = @get_color(0);
+const row_odd_send_color: color = @get_color(1);
+const row_periodic_color: color = @get_color(2);
+
+// Colors for column sort
+const col_even_send_up_color:   color = @get_color(3);
+const col_even_send_down_color: color = @get_color(4);
+const col_even_recv_up_color:   color = @get_color(5);
+const col_even_recv_down_color: color = @get_color(6);
+
+// Import memcpy layout module for 2D grid of PEs
+// This module defines parameters passed to program on the single PE
+const memcpy = @import_module("<memcpy_multi/get_params>", .{
+    .width = width*tile_width,
+    .height = height*tile_height
+    });
+
+// This block is where we define how we want to initialize each PE
+layout {
+
+  // PE coordinates are (column, row)
+  @set_rectangle(width*tile_width, height*tile_height);
+  
+  for (@range(i16, tile_height)) |tile_row| {
+    for (@range(i16, tile_width)) |tile_column| {
+      var starting_row: i16 = tile_row * height;
+      var starting_col: i16 = tile_column * width;
+
+      // Loops over all PEs
+      // As we are assuming particles are incoming already sorted,
+      // all rows in the problem will be the same.
+      for (@range(i16, height)) |row| {
+
+        // For the column sorting portion of the simulation, the router
+        // config is actually quite simple given that we don't have
+        // any periodic conditions to worry about, so we don't have
+        // to make boundary PE's do anything special. Thus, the 
+        // only thing we need to do is have even and odd PE's use
+        // opposite colors for sending/receiving so that they match.
+
+        // Default is even colors
+        var col_send_up_color: color   = col_even_send_up_color;
+        var col_send_down_color: color = col_even_send_down_color;
+        var col_recv_up_color: color   = col_even_recv_up_color;
+        var col_recv_down_color: color = col_even_recv_down_color;
+
+        // The column routes are the same for all PEs
+        var col_send_up_routes      = .{ .rx = .{ RAMP }, .tx = .{ NORTH } };
+        var col_send_down_routes    = .{ .rx = .{ RAMP }, .tx = .{ SOUTH } };
+        var col_recv_up_routes      = .{ .rx = .{ NORTH }, .tx = .{ RAMP } };
+        var col_recv_down_routes    = .{ .rx = .{ SOUTH }, .tx = .{ RAMP } };
+
+        // odd assignments are opposite of even ones
+        if( row % 2 != 0 ) {
+          col_send_up_color    = col_even_recv_down_color;
+          col_send_down_color  = col_even_recv_up_color;
+          col_recv_up_color    = col_even_send_down_color;
+          col_recv_down_color  = col_even_send_up_color;
+        }
+
+        for (@range(i16, width)) |column| {
+
+          // Routing for PE's within a given row for the Phase II round-robin
+          // row exchange is more complicated due to the periodic boundary
+          // condition. Thus, we need to enforce even/odd conditions as
+          // we did for the column sorting routers, but also need to make
+          // special considerations for the boundary PE's as well. 
+
+          // The way we assign colors here, the starting/ending PE's will
+          // still just send/receive on their send/recv colors, and will
+          // be oblivious to the fact that these are using the periodic
+          // routing. I.e., the kernel code is not aware of the periodic
+          // conditions, it doesn't have to enforce the logic, we can handle
+          // it all from just assignment of routers and colors from this file.
+
+          // Default even colors
+          var row_send_color: color = row_even_send_color;
+          var row_recv_color: color = row_odd_send_color;
+
+          var row_send_routes      = .{ .rx = .{ RAMP }, .tx = .{ EAST } };
+          var row_recv_routes      = .{ .rx = .{ WEST }, .tx = .{ RAMP } };
+          var row_periodic_routes  = .{ .rx = .{ EAST }, .tx = .{ WEST } };
+
+          // All rows are the same, but each entry in the row needs to be
+          // intitialized differently based on a few factors:
+          // 1. If it is even or odd
+          // 2. If it is a boundary PE, in which case it will require a unique
+          //    treatment for the periodic boundary condition.
+          var row_is_boundary: bool = false;
+
+          // Make row PE assignments, handling any special boundary conditions
+          if( column % 2 != 0 ) {
+            row_send_color      = row_odd_send_color;
+            row_recv_color      = row_even_send_color;
+          }
+          if( column == 0 ) {
+            row_is_boundary = true;
+            row_recv_color  = row_periodic_color;
+            row_recv_routes = .{ .rx = .{ EAST }, .tx = .{ RAMP } };
+          } else if( column == width - 1) {
+            row_is_boundary = true;
+            row_send_color  = row_periodic_color;
+            row_send_routes = .{ .rx = .{ RAMP }, .tx = .{ WEST } };
+          }
+
+          var gcol : i16 = starting_col + column;
+          var grow : i16 = starting_row + row;
+
+          // With our row/column routing and colors determined, we now
+          // initialize this PE's tile code and router configuration.
+          @set_tile_code(gcol, grow, "device_code.csl", .{
+              .memcpy_params = memcpy.get_params(gcol),
+              .n_starting_particles_per_pe = n_starting_particles_per_pe,
+              .n_nuclides = n_nuclides,
+              .n_gridpoints_per_nuclide = n_gridpoints_per_nuclide,
+              .n_xs = n_xs,
+              .row_send_color = row_send_color,
+              .row_recv_color = row_recv_color,
+              .col_send_up_color   = col_send_up_color,
+              .col_send_down_color = col_send_down_color,
+              .col_recv_up_color   = col_recv_up_color,
+              .col_recv_down_color = col_recv_down_color,
+              .particle_buffer_multiplier = particle_buffer_multiplier,
+              .tile_height = tile_height,
+              .tile_width = tile_width,
+              });
+          // Set row info
+          @set_color_config(gcol, grow, row_send_color, .{.routes = row_send_routes });
+          @set_color_config(gcol, grow, row_recv_color, .{.routes = row_recv_routes });
+          if( !row_is_boundary ) {
+            @set_color_config(gcol, grow, row_periodic_color, .{.routes = row_periodic_routes});
+          }
+          // Set col info
+          @set_color_config(gcol, grow, col_send_up_color,   .{.routes = col_send_up_routes });
+          @set_color_config(gcol, grow, col_send_down_color, .{.routes = col_send_down_routes });
+          @set_color_config(gcol, grow, col_recv_up_color,   .{.routes = col_recv_up_routes });
+          @set_color_config(gcol, grow, col_recv_down_color, .{.routes = col_recv_down_routes });
+        }
+      }
+    }
+  }
+
+  // Export device symbol for arrays
+  // Last argument is mutability: if false, the host can read the array, but not write to it
+  @export_name("particle", [*]f32, true);
+  @export_name("nuclide_energy_grids", [*]f32, true);
+  @export_name("nuclide_xs_data", [*]f32, true);
+  @export_name("densities", [*]f32, true);
+  @export_name("timestamps", [*]u16, true);
+  @export_name("current_n_particles", [*]u16, true);
+  @export_name("particle_finished", [*]f32, true);
+
+  // Export host-callable device function
+  @export_name("start_simulation", fn()void);
+}

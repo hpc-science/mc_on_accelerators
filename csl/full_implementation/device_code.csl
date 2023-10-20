@@ -1,0 +1,1122 @@
+/////////////////////////////////////////////////////////////////////
+// Boilerplate Prologue
+/////////////////////////////////////////////////////////////////////
+
+// Struct containing parameters for memcpy layout
+param memcpy_params: comptime_struct;
+
+// Color used by memcpy for RPC mechanism
+const LAUNCH: color = @get_color(8);
+const round_robin_row_color: color = @get_color(24);
+const recv_task_color: color = @get_color(25);
+const send_task_color: color = @get_color(15);
+const sort_task_color: color = @get_color(16);
+const up_in_callback_color: color = @get_color(20);
+const down_in_callback_color: color = @get_color(19);
+const A_go_color: color = @get_color(18);
+const B_go_color: color = @get_color(17);
+const up_out_callback_color:   color = @get_color(14);
+const down_out_callback_color: color = @get_color(13);
+
+//const diffuse_color: color = @get_color(10);
+//const diffuse_callback_recv_color: color = @get_color(11);
+//const diffuse_callback_send_color: color = @get_color(12);
+
+// memcpy module provides infrastructure for copying data
+// and launching functions from the host
+const sys_mod = @import_module("<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
+  // Color LAUNCH will be used for memcpy's RPC mechanism
+  .LAUNCH = LAUNCH,
+  // memcpy_d2h (device to host) call in run.py reads f32 data from y
+  .data_type = f32
+}));
+
+const tsc = @import_module("<time>");
+
+const random = @import_module("<random>");
+
+//const my_trace = @import_module("<debug>", .{.buffer_size = 500});
+const printf = @import_module("<debug>", .{.buffer_size = 500});
+const layout_module = @import_module("<layout>");
+
+
+/////////////////////////////////////////////////////////////////////
+// Global Kernel Variables
+/////////////////////////////////////////////////////////////////////
+
+// Constants that define the problem size
+// Note: we have chose 16-bit integers, as this is enough to address
+// every byte of the PE's SRAM.
+param n_starting_particles_per_pe: i16;
+param n_nuclides: i16;
+param n_gridpoints_per_nuclide: i16;
+param n_xs: i16;
+
+param row_send_color: color;
+param row_recv_color: color;
+    
+param col_send_up_color: color;
+param col_send_down_color: color;
+param col_recv_up_color: color;
+param col_recv_down_color: color;
+
+param tile_height: i16;
+param tile_width: i16;
+
+
+const width: i16 = @as(i16, @get_rectangle().width) / tile_width;
+const height: i16 = @as(i16, @get_rectangle().height) / tile_height;
+
+var pe_row: i16;
+var pe_col: i16;
+
+param particle_buffer_multiplier: u16;
+
+var enable_diffusion : bool = true;
+const use_rng_interp: bool = true;
+const use_dsd_interp: bool = true;
+
+// Scalars (represented as 1 length arrays, to allow for DSD creation)
+// Representing the number of current particles in the input/output comms buffers
+var current_n_particles_in = [1] u16 {n_starting_particles_per_pe};
+var current_n_particles_in_ptr: [*] u16        = &current_n_particles_in;
+var current_n_particles_out: [1] u16;
+var current_n_particles_out_ptr: [*] u16        = &current_n_particles_out;
+
+var energy_bound_low: f32;
+var energy_bound_high: f32;
+
+// Cross section data arrays
+var nuclide_energy_grids: [n_nuclides * n_gridpoints_per_nuclide] f32;
+var nuclide_xs_data:      [n_nuclides * n_gridpoints_per_nuclide * n_xs] f32;
+var densities:            [n_nuclides] f32;
+//var densities_rep:        [n_nuclides*n_xs] f32;
+
+// Particles are stored contiguously as an energy variable plus five xs points
+const par_sz: i16 = 1 + n_xs;
+const par_szu: u16 = 1 + @as(u16,n_xs);
+const particle_len: i16 = n_starting_particles_per_pe * par_sz;
+const pbl_max_p: u16 = @as(u16, n_starting_particles_per_pe) * particle_buffer_multiplier;
+const pbl: i16 = particle_len * @as(i16, particle_buffer_multiplier); // We define the standard particle buffer as being 3x the starting number
+var particle_in = @zeros([pbl] f32); // Incoming particles from the left (also what the XS lookup kernel operates on)
+var particle_out: [pbl] f32; // Outgoing particles to send to the right
+
+
+// Final particles for sending back to the host
+var particle_finished = @zeros([pbl] f32);
+
+// DSD handles for communicating particle buffers between PEs
+var particle_in_dsd =  @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> particle_in[i] });
+var particle_out_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> particle_out[i] });
+var current_n_particles_in_dsd = @get_dsd(mem1d_dsd,  .{ .tensor_access = |i|{1} -> current_n_particles_in[0] });
+var current_n_particles_out_dsd = @get_dsd(mem1d_dsd,  .{ .tensor_access = |i|{1} -> current_n_particles_out[0] });
+var particle_finished_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> particle_finished[i] });
+
+// Fabric input/output buffers for communicating data (in this case, particle buffers) to the network fabric
+var in_dsd = @get_dsd(fabin_dsd, .{
+    .fabric_color = row_recv_color, .extent = pbl,
+    .input_queue = @get_input_queue(0)
+    });
+var out_dsd = @get_dsd(fabout_dsd, .{
+    .fabric_color = row_send_color, .extent = pbl,
+    .output_queue = @get_output_queue(2)
+    });
+
+// Pointer handles for host <-> device memcpy data transfers
+var particle_in_ptr: [*] f32          = &particle_in;
+var nuclide_energy_grids_ptr: [*] f32 = &nuclide_energy_grids;
+var nuclide_xs_data_ptr: [*] f32      = &nuclide_xs_data;
+var densities_ptr: [*] f32            = &densities;
+var particle_finished_ptr: [*] f32    = &particle_finished;
+
+// Make an array holding the two timetamps (start and stop).
+// Timestamps in CSL are very weird, being 48-bits via an array of
+// three 16 bit unsigned ints. We do some math back on the host
+// to convert the cycle count into an actual cycle count.
+var timestamps = [9] u16 {0, 0, 0, 0, 0, 0, 0, 0, 0};
+var timestamps_ptr: [*] u16 = &timestamps;
+var start = [3] u16 {0, 0, 0};
+var stop = [3] u16 {0, 0, 0};
+var mid = [3] u16 {0, 0, 0};
+
+/////////////////////////////////////////////////////////////////////
+// Column Sorting variables
+/////////////////////////////////////////////////////////////////////
+
+// Number of particles in each buffer, and assoc dsds
+var n_up_in    = [1] u16 {0};
+var n_up_out   = [1] u16 {0};
+var n_down_in  = [1] u16 {0};
+var n_down_out = [1] u16 {0};
+var n_claimed :u16 = 0;
+
+var n_up_in_dsd    = @get_dsd(mem1d_dsd,  .{ .tensor_access = |i|{1} -> n_up_in[0] });
+var n_up_out_dsd   = @get_dsd(mem1d_dsd,  .{ .tensor_access = |i|{1} -> n_up_out[0] });
+var n_down_in_dsd  = @get_dsd(mem1d_dsd,  .{ .tensor_access = |i|{1} -> n_down_in[0] });
+var n_down_out_dsd = @get_dsd(mem1d_dsd,  .{ .tensor_access = |i|{1} -> n_down_out[0] });
+
+// Particle buffers, and assoc dsds
+var up_in:    [pbl] f32;
+var up_out:   [pbl] f32;
+var down_in:  [pbl] f32;
+var down_out: [pbl] f32;
+var claimed:  [pbl] f32;
+
+var up_in_dsd    = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> up_in[i] });
+var up_out_dsd   = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> up_out[i] });
+var down_in_dsd  = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> down_in[i] });
+var down_out_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> down_out[i] });
+var claimed_dsd  = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> claimed[i] });
+
+// Fabric input/output buffers for communicating data (in this case, particle buffers) to the network fabric
+var fab_up_in_dsd = @get_dsd(fabin_dsd, .{
+    .fabric_color = col_recv_up_color, .extent = pbl,
+    .input_queue = @get_input_queue(0)
+    });
+var fab_up_out_dsd = @get_dsd(fabout_dsd, .{
+    .fabric_color = col_send_up_color, .extent = pbl,
+    .output_queue = @get_output_queue(2)
+    });
+var fab_down_in_dsd = @get_dsd(fabin_dsd, .{
+    .fabric_color = col_recv_down_color, .extent = pbl,
+    .input_queue = @get_input_queue(1)
+    });
+var fab_down_out_dsd = @get_dsd(fabout_dsd, .{
+    .fabric_color = col_send_down_color, .extent = pbl,
+    .output_queue = @get_output_queue(3)
+    });
+
+/////////////////////////////////////////////////////////////////////
+// Functions
+/////////////////////////////////////////////////////////////////////
+
+// Binary search function. Searches the "nuclide_energy_grids" array
+// between the ll and ul indices for the quarry energy. Returns the
+// index in the array that stores an energy just below the quarry.
+fn iterative_binary_search(quarry : f32, ll : i16, ul : i16) i16 {
+  var lowerLimit: i16 = ll;
+  var upperLimit: i16 = ul - 1;
+  var examinationPoint: i16;
+  var length: i16 = upperLimit - lowerLimit;
+
+  while ( length > 1 ) {
+    examinationPoint = lowerLimit + ( length / 2 );
+
+    if( nuclide_energy_grids[examinationPoint] > quarry ) {
+      upperLimit = examinationPoint;
+    } else {
+      lowerLimit = examinationPoint;
+    }
+
+    length = upperLimit - lowerLimit;
+  }
+
+  return lowerLimit;
+}
+
+// Sequential search function. Searches the "nuclide_energy_grids" array
+// between the ll and ul indices for the quarry energy. Returns the
+// index in the array that stores an energy just below the quarry.
+// Not currently used, but worth testing to see if there is a speedup
+// over the binary search for small #'s of gridpoints.
+fn sequential_search(quarry : f32, ll : i16, ul : i16) i16 {
+  var i: i16 = ll + 1;
+  while (i < ul) : (i += 1) {
+    if( quarry < nuclide_energy_grids[i] ) {
+      return i-1;
+    }
+  }
+  return ul-2;
+}
+
+var seed : u32 = 42;
+
+// LCG params taken from l'Ecuyer
+// https://www.ams.org/journals/mcom/1999-68-225/S0025-5718-99-00996-5/S0025-5718-99-00996-5.pdf
+//fn LCG_random_float() f32
+//{
+//  const m : u32 = 4294967291; // 2^32 - 5
+//  const a : u32 = 1588635695;
+//  const c : u32 = 12345;
+//  var lcg: u32 = a*seed;
+//	lcg += c;
+//  //seed = (a * seed + c) % m;
+//  //seed = (a * seed + c);
+//seed = lcg;
+//  return @as(f32,seed) / @as(f32,m);
+//}
+
+// Macroscopic XS lookup function. Accumulates macro XS data for
+// n_starting_particles_per_pe over all nuclides.
+fn calculate_xs() void {
+  var p: i16 = 0;
+  while (p < @as(i16,current_n_particles_in[0])) : (p += 1) {
+
+    // Particles are stored as structs of energy + 5 xs data points, with structs contiguous in memory to form the array
+    // Thus, energy elements are stored as the first entry in the struct, so have a stride of 1 + n_xs (i.e., par_sz)
+    var p_offset: i16 = p*par_sz;
+    var e: f32 = particle_in[p_offset];
+    var n: i16 = 0;
+  	for (@range(i16, n_nuclides)) |n| {
+      // Do binary search
+      var lower_index: i16 = iterative_binary_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);
+
+      // Alternate (not in use): do sequential search instead of binary search
+      //var lower_index: i16 = sequential_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);
+
+      // Compute Interpolation factor (expensive due to division)
+      var e_lower  : f32 = nuclide_energy_grids[lower_index];
+      var e_higher : f32 = nuclide_energy_grids[lower_index + 1];
+
+      var f: f32;
+
+      if (use_rng_interp) {
+        var sample : f32 = random.random_f32(e_lower, e_higher);
+        //var sample : f32 = e_lower + LCG_random_float() * (e_higher-e_lower);
+        if( e > sample ) {
+          lower_index += 1;
+        }
+      } else {
+        f = (e_higher - e) / (e_higher - e_lower);
+      }
+
+      if (use_dsd_interp) {
+        var nuclide_xs_data_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{n_xs} -> nuclide_xs_data[i] });
+        nuclide_xs_data_dsd =     @increment_dsd_offset(nuclide_xs_data_dsd, lower_index*n_xs, f32);
+
+        var p_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{n_xs} -> particle_in[i] });
+        p_dsd =     @increment_dsd_offset(p_dsd, p_offset + 1, f32);
+
+        @fmacs(p_dsd, p_dsd, nuclide_xs_data_dsd, densities[n]);
+
+      } else {
+            for (@range(i16, n_xs)) |xs| {
+          // To access this particle's XS data, we begin at the start of the struct, and then skip over the energy field
+          var idx : i16 = p_offset + 1 + xs;
+
+          if (use_rng_interp) {
+            var xs_lower  : f32 = nuclide_xs_data[lower_index * n_xs + xs];
+              particle_in[idx] = particle_in[idx] + densities[n] * xs_lower;
+
+            } else {
+              var xs_lower  : f32 = nuclide_xs_data[lower_index * n_xs       + xs];
+              var xs_higher : f32 = nuclide_xs_data[(lower_index + 1) * n_xs + xs];
+              particle_in[idx] = particle_in[idx] + densities[n] * (xs_higher - f * (xs_higher - xs_lower) );
+            }
+          } // loop over XS
+        }
+      } // loop over nuclides
+    } // loop over particles
+  }
+
+  // Ends simulation by stopping timers and unblocking command stream
+  // NOTE: this function is not equivalent to exit() or quit(), it just unblocks a command
+  // stream, but any remaining code after this function call may get called before the
+  // kernel is killed.
+  fn end_simulation() void{
+
+    // Stop hardware timer (also works in simulator)
+    tsc.get_timestamp(&stop);
+    timestamps[0] = start[0];
+  timestamps[1] = start[1];
+  timestamps[2] = start[2];
+  timestamps[3] = mid[0];
+  timestamps[4] = mid[1];
+  timestamps[5] = mid[2];
+  timestamps[6] = stop[0];
+  timestamps[7] = stop[1];
+  timestamps[8] = stop[2];
+
+  // Stop simulator-only debug timer
+  //my_trace.trace_timestamp();
+  
+  // Copy particles from particles_in buffer to particle_finished buffer
+  particle_finished_dsd = @set_dsd_length(particle_finished_dsd, current_n_particles_in[0] * par_szu);
+  particle_in_dsd       = @set_dsd_length(particle_in_dsd,       current_n_particles_in[0] * par_szu);
+  @fmovs(particle_finished_dsd, particle_in_dsd);
+  
+  // After this function finishes, memcpy's cmd_stream must
+  // be unblocked on all PEs for further memcpy commands
+  // to execute
+  sys_mod.unblock_cmd_stream();
+}
+
+
+const up_in_dsr        = @get_dsr(dsr_dest, 0);
+const up_out_dsr       = @get_dsr(dsr_src1, 0);
+const down_in_dsr      = @get_dsr(dsr_dest, 1);
+const down_out_dsr     = @get_dsr(dsr_src1, 1);
+
+task row_recv() void {
+  if( current_n_particles_in[0] > 0 ) {
+    // Set incoming recv message length
+    in_dsd          = @set_dsd_length(in_dsd,          current_n_particles_in[0] * par_szu);
+    particle_in_dsd = @set_dsd_length(particle_in_dsd, current_n_particles_in[0] * par_szu);
+    
+    // We load the memory DSD into an explicit DSR to conserve DSR usage
+    @load_to_dsr(up_in_dsr, particle_in_dsd);
+
+    // Receive particle data
+    @fmovs(up_in_dsr, in_dsd, .{ .async = true, .activate = round_robin_row_color });
+  } else {
+    @activate(round_robin_row_color);
+  }
+}
+
+task row_send() void {
+  if( current_n_particles_out[0] > 0 ) {
+    // Transmit particles from output buffer to the right, unblock this tasks's color when completed
+    out_dsd = @set_dsd_length(out_dsd, current_n_particles_out[0] * par_szu);
+    
+    // We load the memory DSD into an explicit DSR to conserve DSR usage
+    @load_to_dsr(up_out_dsr, particle_out_dsd);
+
+    // Transmit particle data
+    @fmovs(out_dsd, up_out_dsr, .{ .async = true, .unblock = round_robin_row_color });
+  } else {
+    @unblock(round_robin_row_color);
+  }
+}
+
+//task diffuse_row_recv() void {
+//  if( current_n_particles_in[0] > 0 ) {
+//    // Set incoming recv message length
+//    in_dsd          = @set_dsd_length(in_dsd,          current_n_particles_in[0] * par_szu);
+//    particle_in_dsd = @set_dsd_length(particle_in_dsd, current_n_particles_in[0] * par_szu);
+//    
+//    // We load the memory DSD into an explicit DSR to conserve DSR usage
+//    @load_to_dsr(up_in_dsr, particle_in_dsd);
+//
+//    // Receive particle data
+//    @fmovs(up_in_dsr, in_dsd, .{ .async = true, .activate = diffuse_color });
+//  } else {
+//    @activate(diffuse_color);
+//  }
+//}
+//
+//task diffuse_row_send() void {
+//  if( current_n_particles_out[0] > 0 ) {
+//    // Transmit particles from output buffer to the right, unblock this tasks's color when completed
+//    out_dsd = @set_dsd_length(out_dsd, current_n_particles_out[0] * par_szu);
+//    
+//    // We load the memory DSD into an explicit DSR to conserve DSR usage
+//    @load_to_dsr(up_out_dsr, particle_out_dsd);
+//
+//    // Transmit particle data
+//    @fmovs(out_dsd, up_out_dsr, .{ .async = true, .unblock = diffuse_color });
+//  } else {
+//    @unblock(diffuse_color);
+//  }
+//}
+
+// Counts the number of round-robin comm iterations we have performed
+var round_robin_comm_iter : i16 = 0;
+
+// Main task to perform XS lookups and exchange particles between neighbors.
+// One invocation means all particles currently on this PE will have contributions
+// added from all nuclides on this PE, and then will be sent to the right neighbor,
+// and new ones received from the left neighbor. This task is bound on the color
+// "round_robin_row_color".
+//task round_robin_row_fixed() void {
+//  
+//  round_robin_comm_iter +=1 ;
+//
+//  // Calculate XS contributions. Operates on particle_in buffer.
+//  calculate_xs();
+//
+//  // Check to see if round robin is complete
+//  if(round_robin_comm_iter == width) {
+//    end_simulation();
+//    return;
+//  }
+//
+//  // Copies particles locally from input -> output particle buffer
+//  // We could have used a for loop, but as we already have the DSD's
+//  // defined for communication, we make use of them here.
+//  // We use explicit DSRs for this operation to conserve DSR allocation.
+//  current_n_particles_out[0] = current_n_particles_in[0];
+//  particle_out_dsd = @set_dsd_length(particle_out_dsd, current_n_particles_out[0] * par_szu);
+//  @load_to_dsr(down_out_dsr, particle_in_dsd);
+//  @load_to_dsr(down_in_dsr, particle_out_dsd);
+//  @fmovs(down_in_dsr, down_out_dsr);
+//
+//  ////////////////////////////////////////
+//  // Asynchronous communication routine
+//  ////////////////////////////////////////
+//  //
+//  // The basic premise is that we send all particles on this PE to the right,
+//  // (with periodic conditions), and then receive fresh ones from our left.
+//  // A complexity is that the number of particles held by any PE at once
+//  // is variable due to the random starting distribution of particles, so
+//  // in this scheme we first transmit a message that contains the number
+//  // of particles that will  be sent, and then a second message that contains
+//  // the actual particle array itself.
+//
+//  // Block this task's color. The color will be unblocked and activated
+//  // once all particles have been sent/received, thus calling this function
+//  // again and continuing the loop.
+//  @block(round_robin_row_color);
+//  
+//  // Transmit # of particles to the right (just the #, not the particles themselves yet)
+//  // We use DSRs only for the memory buffers (not the fabric DSDs) to improve DSR allocation.
+//  // Moving fabric DSDs into DSRs gets complicated, as queue init functions also need to be
+//  // called if doing that.
+//  //out_dsd = @set_dsd_length(out_dsd, 1);
+//  //@load_to_dsr(up_out_dsr, current_n_particles_out_dsd);
+//  //@mov16(out_dsd, up_out_dsr, .{ .async = true, .activate = send_task_color });
+//    
+//  // We load the memory DSD into an explicit DSR to conserve DSR usage
+//    @load_to_dsr(up_out_dsr, particle_out_dsd);
+//
+//    // Transmit particle data
+//    @fmovs(out_dsd, up_out_dsr, .{ .async = true, .unblock = round_robin_row_color });
+//
+//  // When the above mov16 operation completes, it will callback the "row_send" function to
+//  // actually transmit all the actual particles themselves
+//
+//  // Receive # incoming particles from the left (just the #), following the same ideas
+//  // as detailed above for sending particles.
+//  //in_dsd = @set_dsd_length(in_dsd, 1);
+//  //@load_to_dsr(up_in_dsr, current_n_particles_in_dsd);
+//  //@mov16(up_in_dsr, in_dsd, .{.async = true, .activate= recv_task_color} );
+//    
+//// We load the memory DSD into an explicit DSR to conserve DSR usage
+//    @load_to_dsr(up_in_dsr, particle_in_dsd);
+//
+//    // Receive particle data
+//    @fmovs(up_in_dsr, in_dsd, .{ .async = true, .activate = round_robin_row_color });
+//
+//  // Neither of the mov16 functions above block, so this function will finish.
+//  // It will be called again when the "round_robin_row_color" gets unblocked and activated
+//  // which happens when all particle data has finished exchanges.
+//}
+
+// Counts the number of round-robin comm iterations we have performed
+var diffuse_iter : i16 = 0;
+
+task round_robin_row() void {
+  
+  if(enable_diffusion) {
+    diffuse_iter +=1 ;
+
+    // Check to see if round robin is complete
+    //if(diffuse_iter == width or diffuse_iter == 100) {
+    if(diffuse_iter == 100) {
+      if(n_claimed > 0) {
+        // Append claimed particles to input buffer particles
+        particle_in_dsd =  @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> particle_in[i] });
+        particle_in_dsd = @increment_dsd_offset(particle_in_dsd, @as(i16,current_n_particles_in[0]) * par_sz, f32);
+        claimed_dsd  = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> claimed[i] });
+        claimed_dsd =     @set_dsd_length(claimed_dsd, n_claimed*par_szu);
+        particle_in_dsd = @set_dsd_length(particle_in_dsd, n_claimed*par_szu);
+
+        @load_to_dsr(down_in_dsr, particle_in_dsd);
+        @load_to_dsr(down_out_dsr, claimed_dsd);
+        @fmovs(down_in_dsr, down_out_dsr);
+      }
+
+      current_n_particles_in[0] += n_claimed;
+      particle_in_dsd =  @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> particle_in[i] });
+
+      enable_diffusion = false;
+      @activate(round_robin_row_color);
+      return;
+    }
+
+    // Take all particles from input buffer and append them to the "claimed" buffer
+    // This can be done by adjusting DSD lengths and offsets (@increment_dsd_offset)
+    // By the end of this operation, input buffer holds nothing, and claimed buffer has everything.
+    // ASSUME we begin the first iteration with n_claimed = 0.
+    claimed_dsd  = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> claimed[i] });
+    claimed_dsd = @increment_dsd_offset(claimed_dsd, @as(i16,n_claimed) * par_sz, f32);
+    claimed_dsd = @set_dsd_length(claimed_dsd, current_n_particles_in[0] * par_szu);
+    particle_in_dsd = @set_dsd_length(particle_in_dsd, current_n_particles_in[0] * par_szu);
+    
+    @load_to_dsr(down_out_dsr, particle_in_dsd);
+    @load_to_dsr(down_in_dsr, claimed_dsd);
+    @fmovs(down_in_dsr, down_out_dsr);
+    
+    n_claimed += current_n_particles_in[0];
+
+    // Take about half the particles off the end of the claimed buffer and move them to
+    // the output buffer.
+    // By the end of this operation, claimed and output each hold about half +/- particle
+    var half : u16 = n_claimed / 2;
+    current_n_particles_out[0] = half;
+    n_claimed -= half;
+
+    particle_out_dsd = @set_dsd_length(particle_out_dsd, current_n_particles_out[0] * par_szu);
+    claimed_dsd  = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> claimed[i] });
+    claimed_dsd = @increment_dsd_offset(claimed_dsd, @as(i16, n_claimed) * par_sz, f32);
+    claimed_dsd = @set_dsd_length(claimed_dsd, half * par_szu);
+    @load_to_dsr(down_out_dsr, claimed_dsd);
+    @load_to_dsr(down_in_dsr, particle_out_dsd);
+    @fmovs(down_in_dsr, down_out_dsr);
+  } else {
+    round_robin_comm_iter +=1 ;
+
+    // Calculate XS contributions. Operates on particle_in buffer.
+    calculate_xs();
+
+    // Check to see if round robin is complete
+    if(round_robin_comm_iter == width) {
+      end_simulation();
+      return;
+    }
+
+    // Copies particles locally from input -> output particle buffer
+    // We could have used a for loop, but as we already have the DSD's
+    // defined for communication, we make use of them here.
+    // We use explicit DSRs for this operation to conserve DSR allocation.
+    current_n_particles_out[0] = current_n_particles_in[0];
+    particle_out_dsd = @set_dsd_length(particle_out_dsd, current_n_particles_out[0] * par_szu);
+    @load_to_dsr(down_out_dsr, particle_in_dsd);
+    @load_to_dsr(down_in_dsr, particle_out_dsd);
+    @fmovs(down_in_dsr, down_out_dsr);
+  }
+
+  ////////////////////////////////////////
+  // Asynchronous communication routine
+  ////////////////////////////////////////
+  //
+  // The basic premise is that we send all particles on this PE to the right,
+  // (with periodic conditions), and then receive fresh ones from our left.
+  // A complexity is that the number of particles held by any PE at once
+  // is variable due to the random starting distribution of particles, so
+  // in this scheme we first transmit a message that contains the number
+  // of particles that will  be sent, and then a second message that contains
+  // the actual particle array itself.
+
+  // Block this task's color. The color will be unblocked and activated
+  // once all particles have been sent/received, thus calling this function
+  // again and continuing the loop.
+  @block(round_robin_row_color);
+  
+  // Transmit # of particles to the right (just the #, not the particles themselves yet)
+  // We use DSRs only for the memory buffers (not the fabric DSDs) to improve DSR allocation.
+  // Moving fabric DSDs into DSRs gets complicated, as queue init functions also need to be
+  // called if doing that.
+  out_dsd = @set_dsd_length(out_dsd, 1);
+  @load_to_dsr(up_out_dsr, current_n_particles_out_dsd);
+  @mov16(out_dsd, up_out_dsr, .{ .async = true, .activate = send_task_color });
+
+  // When the above mov16 operation completes, it will callback the "row_send" function to
+  // actually transmit all the actual particles themselves
+
+  // Receive # incoming particles from the left (just the #), following the same ideas
+  // as detailed above for sending particles.
+  in_dsd = @set_dsd_length(in_dsd, 1);
+  @load_to_dsr(up_in_dsr, current_n_particles_in_dsd);
+  @mov16(up_in_dsr, in_dsd, .{.async = true, .activate= recv_task_color} );
+
+  // Neither of the mov16 functions above block, so this function will finish.
+  // It will be called again when the "round_robin_row_color" gets unblocked and activated
+  // which happens when all particle data has finished exchanges.
+}
+
+
+//task diffuse() void {
+//  
+//  diffuse_iter +=1 ;
+//
+//  // Check to see if round robin is complete
+//  if(diffuse_iter == 10) {
+//    end_simulation();
+//    return;
+//  }
+//
+//  // Take all particles from input buffer and append them to the "claimed" buffer
+//  // This can be done by adjusting DSD lengths and offsets (@increment_dsd_offset)
+//  // By the end of this operation, input buffer holds nothing, and claimed buffer has everything.
+//  // ASSUME we begin the first iteration with n_claimed = 0.
+//  n_claimed += current_n_particles_in[0];
+//  claimed_dsd = @increment_dsd_offset(claimed_dsd, @as(i16,n_claimed) * par_sz, f32);
+//  claimed_dsd = @set_dsd_length(claimed_dsd, current_n_particles_in[0] * par_szu);
+//  
+//  @load_to_dsr(down_out_dsr, particle_in_dsd);
+//  @load_to_dsr(down_in_dsr, claimed_dsd);
+//  @fmovs(down_in_dsr, down_out_dsr);
+//
+//  current_n_particles_in[0] = 0;
+//
+//  // Take about half the particles off the end of the claimed buffer and move them to
+//  // the output buffer.
+//  // By the end of this operation, claimed and output each hold about half +/- particle
+//  var half : u16 = n_claimed / 2;
+//  current_n_particles_out[0] = half;
+//  n_claimed -= half;
+//
+//  particle_out_dsd = @set_dsd_length(particle_out_dsd, current_n_particles_out[0] * par_szu);
+//  claimed_dsd = @increment_dsd_offset(claimed_dsd, @as(i16, n_claimed) * par_sz, f32);
+//  claimed_dsd = @set_dsd_length(claimed_dsd, half * par_szu);
+//  @load_to_dsr(down_out_dsr, claimed_dsd);
+//  @load_to_dsr(down_in_dsr, particle_out_dsd);
+//  @fmovs(down_in_dsr, down_out_dsr);
+//
+//  // Execute normal communication scheme?
+//
+//  // Copies particles locally from input -> output particle buffer
+//  // We could have used a for loop, but as we already have the DSD's
+//  // defined for communication, we make use of them here.
+//  // We use explicit DSRs for this operation to conserve DSR allocation.
+//  //current_n_particles_out[0] = current_n_particles_in[0];
+//  //particle_out_dsd = @set_dsd_length(particle_out_dsd, current_n_particles_out[0] * par_szu);
+//  //@load_to_dsr(down_out_dsr, particle_in_dsd);
+//  //@load_to_dsr(down_in_dsr, particle_out_dsd);
+//  //@fmovs(down_in_dsr, down_out_dsr);
+//
+//  ////////////////////////////////////////
+//  // Asynchronous communication routine
+//  ////////////////////////////////////////
+//  //
+//  // The basic premise is that we send all particles on this PE to the right,
+//  // (with periodic conditions), and then receive fresh ones from our left.
+//  // A complexity is that the number of particles held by any PE at once
+//  // is variable due to the random starting distribution of particles, so
+//  // in this scheme we first transmit a message that contains the number
+//  // of particles that will  be sent, and then a second message that contains
+//  // the actual particle array itself.
+//
+//  // Block this task's color. The color will be unblocked and activated
+//  // once all particles have been sent/received, thus calling this function
+//  // again and continuing the loop.
+//  @block(diffuse_color);
+//  
+//  // Transmit # of particles to the right (just the #, not the particles themselves yet)
+//  // We use DSRs only for the memory buffers (not the fabric DSDs) to improve DSR allocation.
+//  // Moving fabric DSDs into DSRs gets complicated, as queue init functions also need to be
+//  // called if doing that.
+//  out_dsd = @set_dsd_length(out_dsd, 1);
+//  @load_to_dsr(up_out_dsr, current_n_particles_out_dsd);
+//  @mov16(out_dsd, up_out_dsr, .{ .async = true, .activate = diffuse_callback_send_color });
+//
+//  // When the above mov16 operation completes, it will callback the "row_send" function to
+//  // actually transmit all the actual particles themselves
+//
+//  // Receive # incoming particles from the left (just the #), following the same ideas
+//  // as detailed above for sending particles.
+//  in_dsd = @set_dsd_length(in_dsd, 1);
+//  @load_to_dsr(up_in_dsr, current_n_particles_in_dsd);
+//  @mov16(up_in_dsr, in_dsd, .{.async = true, .activate= diffuse_callback_recv_color} );
+//
+//  // Neither of the mov16 functions above block, so this function will finish.
+//  // It will be called again when the "round_robin_row_color" gets unblocked and activated
+//  // which happens when all particle data has finished exchanges.
+//}
+
+// This is the program start point that will be invoked by the host.
+// If we were not interested in timer data, we could also have just
+// block at the bottom so that it launched when the kernel was loaded.
+fn start_simulation() void {
+
+  // Initialize row/col numbers
+  // Need to do this at runtime so as to allow for sharing
+  // of code between PEs
+  pe_row = @as(i16, layout_module.get_y_coord());
+  pe_col = @as(i16, layout_module.get_x_coord());
+
+  pe_row = pe_row % height;
+  pe_col = pe_col % width;
+
+	// prep repeated densities
+  //for (@range(i16, n_nuclides)) |n| {
+ // 	for (@range(i16, n_xs)) |xs| {
+//		densities_rep[n*n_xs + xs] = densities[n];
+//	}
+//}
+
+  // Determine low energy/high energy for the PE
+  if (pe_row == 0) {
+    energy_bound_low = 0.0;
+  } else {
+    energy_bound_low = nuclide_energy_grids[0];
+  }
+
+  if (pe_row == height - 1) {
+    energy_bound_high = 1.0;
+  } else {
+    energy_bound_high = nuclide_energy_grids[n_gridpoints_per_nuclide - 1];
+  }
+
+  //printf.trace_string("e_low");
+  //printf.trace(energy_bound_low);
+  //
+  //printf.trace_string("e_high");
+  //printf.trace(energy_bound_high);
+
+  //printf.trace_string("xs first");
+  //printf.trace(nuclide_xs_data[0]);
+  //
+  //printf.trace_string("xs last");
+  //printf.trace(nuclide_xs_data[n_nuclides * n_gridpoints_per_nuclide * n_xs - 1]);
+
+  //printf.trace_string("particle e");
+  //printf.trace(particle_in[0]);
+
+  // Start hardware timer (also works in simulator)
+  tsc.enable_tsc();
+  tsc.get_timestamp(&start);
+
+  // Start simulator-only debug timer
+  //my_trace.trace_timestamp();
+
+  // If we wanted to skip the sorting step (e.g., if we had pre-sorted
+  // particles on the host), then we could just launch the round-robin
+  // row exchange portion directly here.
+
+  //round_robin_row();
+  
+  // Launches the full column sort routine, which when finished will
+  // begin the round robin stage.
+  sort_column();
+  //end_simulation();
+  //return;
+
+  //round_robin_row();
+
+  //end_simulation();
+}
+
+// Copies a specific particle from contiguous particle buffer "p"
+// located at index "idx" into the claimed buffer. This function
+// is used during the sorting stage when a received particle
+// has been found to be within the current PE's energy range.
+fn keep(p : *[pbl]f32, idx: u16) void {
+  @assert(n_claimed < pbl_max_p);
+  var offset: u16 = n_claimed * par_szu;
+  var i : u16 = 0;
+  while( i < par_szu) : (i += 1) {
+    claimed[offset] = (p.*)[idx+i];
+    offset += 1;
+  }
+  n_claimed += 1;
+}
+
+// Copies a specific particle from contiguous particle buffer "p"
+// located at index "idx" into the upwards buffer. This function
+// is used during the sorting stage when a received particle
+// has been found to be BELOW the current PE's energy range. This
+// sounds backwards at first, but we have lowest energy row being
+// row 0, with higher energies having higher row numbers. As the
+// PE's are numbered from the top left corner, this means that
+// lower energy particles need to migrate upwards towards the low
+// numbered rows.
+fn buffer_up(p : *[pbl]f32, idx: u16) void {
+  @assert(n_up_out[0] < pbl_max_p);
+  var offset: u16 = n_up_out[0] * par_szu;
+  var i : u16 = 0;
+  while( i < par_szu) : (i += 1) {
+    up_out[offset] = (p.*)[idx+i];
+    offset += 1;
+  }
+  n_up_out[0] += 1;
+}
+
+// Copies a specific particle from contiguous particle buffer "p"
+// located at index "idx" into the downwards buffer. This function
+// is used during the sorting stage when a received particle
+// has been found to be ABOVE the current PE's energy range. This
+// sounds backwards at first, but we have lowest energy row being
+// row 0, with higher energies having higher row numbers. As the
+// PE's are numbered from the top left corner, this means that
+// higher energy particles need to migrate downwards towards the high
+// numbered rows.
+fn buffer_down(p : *[pbl]f32, idx: u16) void {
+  @assert(n_down_out[0] < pbl_max_p);
+  var offset: u16 = n_down_out[0] * par_szu;
+  var i : u16 = 0;
+  while( i < par_szu) : (i += 1) {
+    down_out[offset] = (p.*)[idx+i];
+    offset += 1;
+  }
+  n_down_out[0] += 1;
+}
+
+// Processes a contiguous buffer of particles "p", filled with "n"
+// particles. Compares the energy level of each particle to the
+// current PE's energy range. Assigns the particle to one of three
+// possible bins (keep, send upwards, and send downwards), and copies
+// it into a corresponding contiguous buffer.
+fn process_energies(p: *[pbl] f32, n: u16) void {
+  var i : u16 = 0;
+  while( i < n) : (i += 1) {
+    var idx : u16 = i * par_szu;
+    var e : f32 = (p.*)[idx];
+    if ( e < energy_bound_low ) {
+      // If this is the lowest row, then we should keep the particle
+      if (pe_row == 0 )
+      {
+        keep(p, idx);
+      } else {
+        // We buffer up, as lower energy rows have lower numbered
+        // rows. PE's are addressed as (0,0) for the top-left corner,
+        // so lower energy rows are northwards in the grid.
+        buffer_up(p, idx);
+      }
+    } else if ( e > energy_bound_high ) {
+      // If this is the highest row, then we should keep the particle
+      if (pe_row == height-1) {
+        keep(p, idx);
+      } else {
+        // We buffer down, as higher energy rows have higher numbered
+        // rows. PE's are addressed as (0,0) for the top-left corner,
+        // so higher energy rows are southwards in the grid.
+        buffer_down(p, idx);
+      }
+    } else {
+      keep(p, idx);
+    }
+  }
+}
+
+// These functions will be used by the column sorting scheme
+// to invoke the loop again. Each of A_go and B_go both will have
+// communication calls that will ublock + activate them.
+// They are needed, as colors can only be dependent on two messages
+// (e.g., one to unblock, one to activate), so if we are dependent
+// on 4 messages (e.g., to send/recv in two directions), then we
+// have to have another level.
+task A_go() void {
+  @unblock(sort_task_color);
+}
+
+task B_go() void {
+  @activate(sort_task_color);
+}
+  
+// The folllowing 4 functions are all callbacks used for sending and
+// receiving particles during the Phase 1 column sorting stage.
+// We load memory DSDs into explicit DSRs to fix "not enough DSRs"
+// compiler issues. We do not load fabric in/out DSDs into DSRs, 
+// as this would require a bunch of calls to initialize their queues,
+// and may have other issues.
+task up_in_callback() void {
+  if( n_up_in[0] > 0 ) {
+    fab_up_in_dsd = @set_dsd_length(fab_up_in_dsd, n_up_in[0] * par_szu);
+    up_in_dsd     = @set_dsd_length(up_in_dsd,     n_up_in[0] * par_szu);
+    @load_to_dsr(up_in_dsr, up_in_dsd);
+    @fmovs(up_in_dsr, fab_up_in_dsd, .{ .async=true, .unblock = B_go_color});
+  } else {
+    @unblock(B_go_color);
+  }
+}
+
+task down_in_callback() void {
+  if( n_down_in[0] > 0 ) {
+    fab_down_in_dsd = @set_dsd_length(fab_down_in_dsd, n_down_in[0] * par_szu);
+    down_in_dsd     = @set_dsd_length(down_in_dsd,     n_down_in[0] * par_szu);
+    @load_to_dsr(down_in_dsr, down_in_dsd);
+    @fmovs(down_in_dsr, fab_down_in_dsd, .{ .async=true, .activate = B_go_color});
+  } else {
+    @activate(B_go_color);
+  }
+}
+
+task up_out_callback() void {
+  if (n_up_out[0] > 0 ) {
+    fab_up_out_dsd = @set_dsd_length(fab_up_out_dsd, n_up_out[0] * par_szu);
+    up_out_dsd =     @set_dsd_length(up_out_dsd,     n_up_out[0] * par_szu);
+    @load_to_dsr(up_out_dsr, up_out_dsd);
+    @fmovs(fab_up_out_dsd, up_out_dsr, .{ .async = true, .unblock = A_go_color });
+  } else {
+    @unblock(A_go_color);
+  }
+}
+
+task down_out_callback() void{
+  if (n_down_out[0] > 0 ) {
+    fab_down_out_dsd = @set_dsd_length(fab_down_out_dsd, n_down_out[0] * par_szu);
+    down_out_dsd =     @set_dsd_length(down_out_dsd,     n_down_out[0] * par_szu);
+    @load_to_dsr(down_out_dsr, down_out_dsd);
+    @fmovs(fab_down_out_dsd, down_out_dsr, .{ .async = true, .activate = A_go_color });
+  } else {
+    @activate(A_go_color);
+  }
+}
+
+// Counts the number of comm iterations we have performed
+var sort_iter : i16 = 0;
+
+// This is the main loop of the column sorting Phase 1 stage.
+// It will send/recv particle counts and then particle data both northwards and
+// southwards. It follows similar termination criteria as the round-robin exchange,
+// where the number of iterations == the height, covering a worst case where
+// a particle starting at the bottom has to move all the way to the top. As a variable
+// number of particles is moved each iteration, we first send the number of particles that
+// will be transmitted, and then if this is nonzero, we also send/recv the particle buffers
+// themselves. Unlike the round-robin routine, where particles only moved left -> right,
+// here, at each stage particles are free to move both up and down, so each PE must coordinate
+// both sending and receiving particles in both north and south directions.
+task sort_column() void {
+
+  // Zero out outgoing particle arrays before we start sorting from input arrays -> output arrays
+  n_down_out[0] = 0;
+  n_up_out[0] = 0;
+  
+
+  // The first step is to process all incoming particles (or starting particle buffers)
+  // to determine if they are inside this PE's energy band, or if they need
+  // to be sent up or down.
+  if (sort_iter == 0) {
+    // If this is the first iteration, we pull particles from the particles_in buffer
+    process_energies(&particle_in,current_n_particles_in[0]);
+    current_n_particles_in[0] = 0;
+  } else {
+    // Otherwise, need to read through both up and down incoming
+    process_energies(&up_in,n_up_in[0]);
+    n_up_in[0] = 0;
+    process_energies(&down_in,n_down_in[0]);
+    n_down_in[0] = 0;
+  }
+  
+  sort_iter +=1 ;
+
+  // Check to see if we have completed all sorting iterations.
+  // If we have, move the particles into the expected buffer
+  // and commence phase II of the simulation (e.g., XS calculation
+  // and round-robin)
+  if(sort_iter == height) {
+    // Copy keep particles into particles_in buffer
+    claimed_dsd = @set_dsd_length(claimed_dsd, n_claimed*par_szu);
+    particle_in_dsd = @set_dsd_length(particle_in_dsd, n_claimed*par_szu);
+    @fmovs(particle_in_dsd, claimed_dsd);
+    current_n_particles_in[0] = n_claimed;
+
+    // Set timer with simulator timer
+    //my_trace.trace_timestamp();
+	
+    // Set timer with hardware counter timer
+    tsc.get_timestamp(&mid);
+
+    // If we wanted to only perfom sorting, we could end the simulation here
+    //end_simulation();
+    //return;
+
+    // Otherwise, commence phase II
+    n_claimed = 0;
+    //end_simulation();
+    round_robin_row();
+    //diffuse();
+    return;
+  }
+
+  // If we have not completed all sorting iterations, we still have
+  // more sorting work to do. At this point, we begin the communcation
+  // phase.
+
+  // Block this task's color, as well aso the colors feeding into it.
+  // We have to use 3 colors here, as we are dependent on 4 basic tasks
+  // finishing (send and receive in both up and down directions). As
+  // a color can only be controlled by one block and one activate, we
+  // therefore need to use 3 colors to represent 4 dependencies, as 
+  // arranged in a tree structure.
+  @block(sort_task_color);
+  @block(A_go_color);
+  @block(B_go_color);
+
+  // The following 4 conditional blocks all have the same basic structure.
+  // Each one transmits or receives a particle count from the PE above or
+  // below it. Boundary conditions are also enforced, i.e., if we are row
+  // 0 (containing the lowest energy band), then we don't need to transmit
+  // or receive any particles from the PE above us, as we are already in
+  // row 0 (the north-most row in the PE grid, which is numbered as (0,0)
+  // starting the the top left corner. Similar to elsewhere, we use
+  // explict DSRs for the memory DSDs, but leave the fabric in/out DSDs
+  // as is, to avoid having to initialize queues etc. 
+
+  if ( pe_row > 0 ) {
+    // Transmit # of particles out up
+    fab_up_out_dsd = @set_dsd_length(fab_up_out_dsd,1);
+    @load_to_dsr(up_out_dsr, n_up_out_dsd);
+    @mov16(fab_up_out_dsd, up_out_dsr, .{ .async = true , .activate = up_out_callback_color });
+
+    // Transmit particles out up (via call back)
+  } else {
+    @unblock(A_go_color);
+  }
+  
+  if( pe_row < height - 1 ) {
+    // Transmit # of particles out down
+    fab_down_out_dsd = @set_dsd_length(fab_down_out_dsd,1);
+    @load_to_dsr(down_out_dsr, n_down_out_dsd);
+    @mov16(fab_down_out_dsd, down_out_dsr, .{ .async = true, .activate = down_out_callback_color });
+  
+    // Transmit particles out down (via call back)
+  } else {
+    @activate(A_go_color);
+  }
+
+  if (pe_row > 0) {
+    // Recv # of particles up
+    fab_up_in_dsd = @set_dsd_length(fab_up_in_dsd,1);
+    @load_to_dsr(up_in_dsr, n_up_in_dsd);
+    @mov16(up_in_dsr, fab_up_in_dsd, .{ .async = true, .activate = up_in_callback_color });
+
+    // Recv particles up (via call back)
+  } else {
+    @unblock(B_go_color);
+  }
+
+  if (pe_row < height - 1 ) {
+    // Recv # of particles down
+    fab_down_in_dsd = @set_dsd_length(fab_down_in_dsd,1);
+    @load_to_dsr(down_in_dsr, n_down_in_dsd);
+    @mov16(down_in_dsr, fab_down_in_dsd, .{ .async = true, .activate = down_in_callback_color });
+
+    // (B) Recv particles down (via call back)
+  } else {
+    @activate(B_go_color);
+  }
+}
+
+/////////////////////////////////////////////////////////////////////
+// Exporting variable and function symbols to the host
+/////////////////////////////////////////////////////////////////////
+
+comptime {
+
+  // Binding of tasks to colors
+  @bind_task(round_robin_row, round_robin_row_color);
+  @bind_task(row_recv, recv_task_color);
+  @bind_task(row_send, send_task_color);
+  @bind_task(A_go, A_go_color);
+  @bind_task(B_go, B_go_color);
+  @bind_task(sort_column, sort_task_color);
+  @bind_task(up_out_callback,   up_out_callback_color);
+  @bind_task(down_out_callback, down_out_callback_color);
+  @bind_task(up_in_callback,    up_in_callback_color);
+  @bind_task(down_in_callback,  down_in_callback_color);
+  
+  //@bind_task(diffuse, diffuse_color);
+  //@bind_task(diffuse_row_recv, diffuse_callback_recv_color);
+  //@bind_task(diffuse_row_send, diffuse_callback_send_color);
+  
+  // I'm not sure why, but the documentation seems to suggest
+  // that we need to block any colors used for data transfer,
+  // otherwise the compiler will basically send anything coming
+  // in from the router on these colors to the equivalent of /dev/null.
+  // The blocks ensure the data will wait in the incoming buffer until
+  // we receive them with our call to @fmovs in the main loop.
+  @block(row_send_color);
+  @block(row_recv_color);
+  @block(col_send_up_color);
+  @block(col_send_down_color);
+  @block(col_recv_up_color);
+  @block(col_recv_down_color);
+
+  // Export handle's to particle and XS data buffers for
+  // initialization and transfer between host <-> device
+  @export_symbol(particle_in_ptr, "particle");
+  @export_symbol(nuclide_energy_grids_ptr, "nuclide_energy_grids");
+  @export_symbol(nuclide_xs_data_ptr, "nuclide_xs_data");
+  @export_symbol(densities_ptr, "densities");
+  @export_symbol(timestamps_ptr, "timestamps");
+  @export_symbol(current_n_particles_in_ptr, "current_n_particles");
+  @export_symbol(particle_finished_ptr, "particle_finished");
+
+  // Export function so it is host-callable by RPC mechanism
+  @export_symbol(start_simulation);
+
+  // Create RPC server using color LAUNCH
+  @rpc(LAUNCH);
+}
