@@ -1,4 +1,5 @@
 # Monte Carlo Cross Section Lookup Kernel 
+[![DOI](https://zenodo.org/badge/707750369.svg)](https://zenodo.org/doi/10.5281/zenodo.10067505)
 
 This repository contains several implementations of the continuous energy Monte Carlo cross section lookup kernel.
 
