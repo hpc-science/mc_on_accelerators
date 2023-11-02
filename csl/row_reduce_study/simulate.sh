@@ -21,8 +21,8 @@ fi
 N_NUCLIDES=$((1 * WIDTH))
 
 HEIGHT=1
-FAB_DIMS="$((WIDTH + 7)),$((HEIGHT+2))"
-FAB_OFFSETS="4,1"
+
+N_BATCHES=1
 
 # nuclide density: N_NUCLIDES
 # nuclide energy grids: N_NUCLIDES * N_GRID_POINTS_PER_NUCLIDE
@@ -34,8 +34,11 @@ bytes_per_pe=$(((nuclide_data_count / WIDTH + (N_XS + 1) * N_PARTICLES_PER_ROW) 
 echo "estimated KB per PE: $((bytes_per_pe / 1024))"
 
 set -x
-cslc ./layout.csl --fabric-dims=$FAB_DIMS --fabric-offsets=$FAB_OFFSETS \
-  --params=N_PARTICLES_PER_ROW:$N_PARTICLES_PER_ROW,N_XS:$N_XS,N_NUCLIDES:$N_NUCLIDES,N_GRID_POINTS_PER_NUCLIDE:$N_GRID_POINTS_PER_NUCLIDE,width:$WIDTH \
-  -o out --memcpy --channels 1
-cs_python host.py --name out
+python compile.py --mode singularity ./layout.csl \
+    --height $HEIGHT --width $WIDTH \
+    --particles-per-row $N_PARTICLES_PER_ROW \
+    --particle-batches $N_BATCHES \
+    --xs $N_XS --nuclides $N_NUCLIDES \
+    --grid-points-per-nuclide $N_GRID_POINTS_PER_NUCLIDE
+cs_python host.py --mode singularity
 set +x
