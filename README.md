@@ -24,3 +24,8 @@ This code was used to generate results on an A100 GPU for the baseline compariso
 ## Reference
 
 Those wishing to reference this work or code within this repository should use the following reference:
+
+## Source Code Contributors
+
+- John Tramm
+- Bryce Allen
