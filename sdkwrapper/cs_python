@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+# host wrapper for a container-hosted python
+
+# modified version to simplify using project wide python modules, e.g.
+# sdkwrapper. Note that this needs to be copied to overwrite the official
+# version, because it looks at the script path to determine the cerebras
+# sdk directory.
+
+# locate our own directory. Use $0 instead of BASH_SOURCE to allow symlink
+# to modified cs_python script
+MY_DIR=$(cd -- "$(dirname -- "$0")" &>/dev/null && pwd)
+
+# the SIF should be adjacent to us
+declare -a SIFS=( $(shopt -s nullglob; echo "${MY_DIR}/cbcore_sdk*.sif") )
+if (( ${#SIFS[*]} <= 0)); then
+  printf 'SIF not found\n' >&2
+  exit 1
+fi
+if (( ${#SIFS[*]} > 1)); then
+  printf 'multiple SIF files found (%s)\n' "${SIFS[*]}" >&2;
+  exit 1
+fi
+
+if ! command -v singularity &>/dev/null; then
+  printf 'singularity not in $PATH' >&2
+  exit 1
+fi
+
+PWD=$(realpath $(pwd))
+# Note: the parent is not enough for further nested projects
+# PWD_PARENT=$(realpath "$PWD"/../)
+exec singularity exec --containall "--bind=${HOME}" "--pwd=${PWD}" \
+  --env "PYTHONPATH=$PYTHONPATH:/cbcore/py_root" \
+  --bind=${TMPDIR:-/tmp}:/tmp -- "${SIFS}" \
+  python "$@"
