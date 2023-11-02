@@ -19,6 +19,8 @@ This code was used to generate results for the "alternative algorithms" section 
 
 To give performance results on the WSE-2 a baseline for comparison, a CUDA version for use with NVIDIA GPUs was also implemented. Those code is available in the `cuda` folder. Instructions for compiling and running this code are available in the README.md file in that directory.
 
+This code was used to generate results on an A100 GPU for the baseline comparison section of the publication on this topic linked below.
+
 ## Reference
 
 Those wishing to reference this work or code within this repository should use the following reference:
