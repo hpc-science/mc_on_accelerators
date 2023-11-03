@@ -28,12 +28,16 @@ TILE_HEIGHT=1
 # started with.
 PARTICLE_BUFFER_MULTIPLIER=3
 
-# The 7 and 2 here are fixed numbers needed by CSL if using memcpy.
-FABRIC_WIDTH=$(($WIDTH * $TILE_WIDTH + 7))
-FABRIC_HEIGHT=$(($HEIGHT * $TILE_HEIGHT + 2))
+MODE=singularity
 
 # Invoke csl compiler, passing above parameters
-cslc device_layout.csl --fabric-dims=${FABRIC_WIDTH},${FABRIC_HEIGHT} --fabric-offsets=4,1 --params=width:${WIDTH},height:${HEIGHT},n_starting_particles_per_pe:${NPARTICLES},n_nuclides:${NNUCLIDES},n_gridpoints_per_nuclide:${NGRIDPOINTS},n_xs:${NXS},particle_buffer_multiplier:${PARTICLE_BUFFER_MULTIPLIER},tile_width:${TILE_WIDTH},tile_height:${TILE_HEIGHT} --memcpy --channels=1 -o out
+python compile.py --mode $MODE ./device_layout.csl \
+    --height $HEIGHT --width $WIDTH \
+    --tile-height $TILE_HEIGHT --tile-width $TILE_WIDTH \
+    --particles $NPARTICLES \
+    --xs $NXS --nuclides $NNUCLIDES \
+    --gp $NGRIDPOINTS \
+    --particle-buffer-multiplier $PARTICLE_BUFFER_MULTIPLIER
 
 # Invoke python code (above parameters will be read from compiled CSL file by python library)
-cs_python host_code.py --name out
+cs_python host_code.py --mode $MODE
