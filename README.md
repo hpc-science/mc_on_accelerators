@@ -24,7 +24,18 @@ This code was used to generate results on an A100 GPU for the baseline compariso
 
 ## Reference
 
-Those wishing to reference this work or code within this repository should use the following reference:
+Those wishing to reference this work or code within this repository should use the following biobtex reference:
+
+```
+@misc{tramm2023efficient,
+      title={Efficient Algorithms for Monte Carlo Particle Transport on AI Accelerator Hardware}, 
+      author={John Tramm and Bryce Allen and Kazutomo Yoshii and Andrew Siegel and Leighton Wilson},
+      year={2023},
+      eprint={2311.01739},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC}
+}
+```
 
 ## Source Code Contributors
 
