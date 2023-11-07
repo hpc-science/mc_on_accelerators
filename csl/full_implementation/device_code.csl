@@ -718,6 +718,10 @@ fn start_simulation() void {
   pe_row = pe_row % height;
   pe_col = pe_col % width;
 
+  if (width == 1) {
+    enable_diffusion = false;
+  }
+
 	// prep repeated densities
   //for (@range(i16, n_nuclides)) |n| {
  // 	for (@range(i16, n_xs)) |xs| {

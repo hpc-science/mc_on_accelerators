@@ -29,8 +29,10 @@ class Particle:
 # such that particles will end up with an even distribution.
 ASSUME_PERFECT_LOAD_BALANCE = False
 
-# Not going to work correctly with stochastic interpolation
-VALIDATE_RESULTS = True
+# Note: validation not expected to work when using stochastic interpolation,
+# as this mode uses the Cerebras hardware generator, which is not
+# reproducible on the host.
+VALIDATE_RESULTS = False
 
 #####################################################################
 # I/O helper functions
@@ -503,8 +505,7 @@ else:
 # Compute python reference solution on the host
 particle_xs_expected = []
 reference_particles = []
-#if VALIDATE_RESULTS:
-if False:
+if VALIDATE_RESULTS:
     print("Computing reference solution on host...")
     particle_xs_expected = calculate_xs_reference(n_starting_particles_per_pe*width*height, n_nuclides*width, n_gridpoints_per_nuclide*height, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height)
 
