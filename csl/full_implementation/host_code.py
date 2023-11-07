@@ -5,10 +5,7 @@ import json
 import numpy as np
 import time
 
-# For CS2 Hardware:
-from cerebras_appliance.sdk import (SdkCompiler,SdkRuntime)
-from cerebras_appliance.pb.sdk.sdk_common_pb2 import (MemcpyDataType,MemcpyOrder)
-from cerebras_appliance.sdk.debug_util import debug_util
+from sdkwrapper import SdkWrapper, SdkMode, add_mode_arg
 
 # For Singularlity-Based SDK Simulator:
 #from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, MemcpyOrder # pylint: disable=no-name-in-module
@@ -71,53 +68,53 @@ def print_logo():
 # data arrays to/from device. They are useful for reducing the amount
 # of repeated boilerplate. Currently, they just copy the arrays exactly
 # to/from the single PE in the problem
-def copy_array_host_to_device(arr, name, runner, width, height, starting_col=0, starting_row=0):
-    symbol = runner.get_id(name)
+def copy_array_host_to_device(arr, name, sdk, width, height, starting_col=0, starting_row=0):
+    symbol = sdk.get_id(name)
     elements_per_pe = np.int32(arr.size / (width * height))
-    handle = runner.memcpy_h2d(symbol, arr, starting_col, starting_row, width, height, elements_per_pe, streaming=False,
-            order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+    handle = sdk.memcpy_h2d(symbol, arr, starting_col, starting_row, width, height, elements_per_pe, streaming=False,
+            order=sdk.MemcpyOrder.ROW_MAJOR, data_type=sdk.MemcpyDataType.MEMCPY_32BIT, nonblock=False)
     return handle
 
-def copy_array_host_to_device_COL(arr, name, runner, width, height):
-    symbol = runner.get_id(name)
+def copy_array_host_to_device_COL(arr, name, sdk, width, height):
+    symbol = sdk.get_id(name)
     elements_per_pe = np.int32(arr.size / (width * height))
-    handle = runner.memcpy_h2d(symbol, arr, 0, 0, width, height, elements_per_pe, streaming=False,
-            order=MemcpyOrder.COL_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+    handle = sdk.memcpy_h2d(symbol, arr, 0, 0, width, height, elements_per_pe, streaming=False,
+            order=sdk.MemcpyOrder.COL_MAJOR, data_type=sdk.MemcpyDataType.MEMCPY_32BIT, nonblock=False)
     return handle
 
-def copy_array_device_to_host(arr, name, runner, width, height, starting_col=0, starting_row=0):
-    symbol = runner.get_id(name)
+def copy_array_device_to_host(arr, name, sdk, width, height, starting_col=0, starting_row=0):
+    symbol = sdk.get_id(name)
     elements_per_pe = np.int32(arr.size / (width * height))
-    handle = runner.memcpy_d2h(arr, symbol, starting_col, starting_row, width, height, elements_per_pe, streaming=False,
-            order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+    handle = sdk.memcpy_d2h(arr, symbol, starting_col, starting_row, width, height, elements_per_pe, streaming=False,
+            order=sdk.MemcpyOrder.ROW_MAJOR, data_type=sdk.MemcpyDataType.MEMCPY_32BIT, nonblock=False)
     return handle
 
-def copy_array_device_to_host_16_bit(arr, name, runner, width, height, starting_col=0, starting_row=0):
-    symbol = runner.get_id(name)
+def copy_array_device_to_host_16_bit(arr, name, sdk, width, height, starting_col=0, starting_row=0):
+    symbol = sdk.get_id(name)
     elements_per_pe = np.int32(arr.size / (width * height))
-    handle = runner.memcpy_d2h(arr, symbol, starting_col, starting_row, width, height, elements_per_pe, streaming=False,
-            order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_16BIT, nonblock=False)
+    handle = sdk.memcpy_d2h(arr, symbol, starting_col, starting_row, width, height, elements_per_pe, streaming=False,
+            order=sdk.MemcpyOrder.ROW_MAJOR, data_type=sdk.MemcpyDataType.MEMCPY_16BIT, nonblock=False)
     return handle
 
-def copy_array_host_to_device_single_row(arr, name, runner, width, row, starting_col=0, starting_row=0):
-    symbol = runner.get_id(name)
+def copy_array_host_to_device_single_row(arr, name, sdk, width, row, starting_col=0, starting_row=0):
+    symbol = sdk.get_id(name)
     elements_per_pe = np.int32(arr.size / width)
-    handle = runner.memcpy_h2d(symbol, arr, starting_col, starting_row + row, width, 1, elements_per_pe, streaming=False,
-            order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+    handle = sdk.memcpy_h2d(symbol, arr, starting_col, starting_row + row, width, 1, elements_per_pe, streaming=False,
+            order=sdk.MemcpyOrder.ROW_MAJOR, data_type=sdk.MemcpyDataType.MEMCPY_32BIT, nonblock=False)
     return handle
 
-def copy_array_host_to_device_single_column(arr, name, runner, height, column, starting_col=0, starting_row=0):
-    symbol = runner.get_id(name)
+def copy_array_host_to_device_single_column(arr, name, sdk, height, column, starting_col=0, starting_row=0):
+    symbol = sdk.get_id(name)
     elements_per_pe = np.int32(arr.size / height)
-    handle = runner.memcpy_h2d(symbol, arr, starting_col + column, starting_row, 1, height, elements_per_pe, streaming=False,
-            order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+    handle = sdk.memcpy_h2d(symbol, arr, starting_col + column, starting_row, 1, height, elements_per_pe, streaming=False,
+            order=sdk.MemcpyOrder.ROW_MAJOR, data_type=sdk.MemcpyDataType.MEMCPY_32BIT, nonblock=False)
     return handle
 
-def copy_array_host_to_device_single_PE(arr, name, runner, row, column):
-    symbol = runner.get_id(name)
+def copy_array_host_to_device_single_PE(arr, name, sdk, row, column):
+    symbol = sdk.get_id(name)
     elements_per_pe = np.int32(arr.size)
-    handle = runner.memcpy_h2d(symbol, arr, column, row, 1, 1, elements_per_pe, streaming=False,
-            order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+    handle = sdk.memcpy_h2d(symbol, arr, column, row, 1, 1, elements_per_pe, streaming=False,
+            order=sdk.MemcpyOrder.ROW_MAJOR, data_type=sdk.MemcpyDataType.MEMCPY_32BIT, nonblock=False)
     return handle
 
 #####################################################################
@@ -405,9 +402,7 @@ def parse_args():
     # three modes are possible - the singularity simulator, the app sdk
     # simulator, and the app sdk submit to real CS-2
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["singularity", "appsim", "cs2"],
-                        help="Run mode (singularity, appsim, cs2)",
-                        default="singularity")
+    add_mode_arg(parser)
     #parser.add_argument("--cmaddr", help="IP:port for CS system")
     parser.add_argument("--name",
                         help="singularity name OR artifact id OR artifact id json file path")
@@ -423,44 +418,31 @@ def parse_args():
 args = parse_args()
 mode = args.mode
 name = args.name
-
-is_app_sdk = (mode in ("appsim", "cs2"))
-
-if is_app_sdk:
-    if name is None:
-        name = "artifact_id.json"
-    if name.endswith(".json"):
-        with open(name, "r") as f:
-            hashstr = json.load(f)
-            name = hashstr
+sdk = SdkWrapper(mode, name)
 
 # Set the starting seed
 np.random.seed(1337)
 
-# Get matrix dimensions from compile metadata
-with open(f"{name}/out.json", encoding='utf-8') as json_file:
-    compile_data = json.load(json_file)
-
 # Get pararms defined in .sh script that show up in compiled CSL module
-width  = int(compile_data['params']['width'])
-height = int(compile_data['params']['height'])
+width  = int(sdk.compile_data['params']['width'])
+height = int(sdk.compile_data['params']['height'])
 
-tile_width  = int(compile_data['params']['tile_width'])
-tile_height = int(compile_data['params']['tile_height'])
+tile_width  = int(sdk.compile_data['params']['tile_width'])
+tile_height = int(sdk.compile_data['params']['tile_height'])
 
 # Number of particles to simulate (one lookup per particle)
-n_starting_particles_per_pe = int(compile_data['params']['n_starting_particles_per_pe'])
+n_starting_particles_per_pe = int(sdk.compile_data['params']['n_starting_particles_per_pe'])
 
 # Number of nuclides in the problem
-n_nuclides = int(compile_data['params']['n_nuclides'])
+n_nuclides = int(sdk.compile_data['params']['n_nuclides'])
 # Number of energy gridpoints per problem
-n_gridpoints_per_nuclide = int(compile_data['params']['n_gridpoints_per_nuclide'])
+n_gridpoints_per_nuclide = int(sdk.compile_data['params']['n_gridpoints_per_nuclide'])
 
 # Number of cross section reaction channels stored
 # E.g., total, fission, nu-fission, elastic, absorption
-n_xs = int(compile_data['params']['n_xs'])
+n_xs = int(sdk.compile_data['params']['n_xs'])
 
-particle_buffer_multiplier = int(compile_data['params']['particle_buffer_multiplier'])
+particle_buffer_multiplier = int(sdk.compile_data['params']['particle_buffer_multiplier'])
 
 # Compute Total Number of PE's
 n_PE = width * height
@@ -547,18 +529,6 @@ xs_3D = np.reshape(nuclide_xs_data, (n_nuclides * width, n_gridpoints_per_nuclid
 print_border("Host -> Device Data Migration")
 
 # Construct a runner using SdkRuntime
-debug_mod = None
-if is_app_sdk:
-    simulator = (mode == "appsim")
-    runner = SdkRuntime(name, simulator=simulator)
-    #if simulator:
-    #    debug_mod = debug_util(name, runner)
-else:
-    runner = SdkRuntime(name)
-    debug_mod = debug_util(name)
-
-
-# Construct a runner using SdkRuntime
 #runner = SdkRuntime(args.name, cmaddr=args.cmaddr)
 
 print("Packing particles into contiguous buffer for transfer...")
@@ -580,12 +550,7 @@ conv_nuclide_xs =  convolute_xs_data_for_memcpy_fast(n_nuclides, n_gridpoints_pe
 
 print("Starting Cerebras Runner...")
 # Load and run the program
-if is_app_sdk:
-    runner.start()
-else:
-    runner.load()
-    runner.run()
-
+sdk.start()
 
 handles = []
 
@@ -609,11 +574,11 @@ for tile_row in range(tile_height):
         #    print("trasnferring NEGs to device. Doing single row %d" % row)
         #    print("low, high = %d, %d" % (low, high))
         #    print(nuclide_energy_grids[low:high])
-        #    handle = copy_array_host_to_device_single_row(np.tile(nuclide_energy_grids[low:high], width*n_nuclides), 'nuclide_energy_grids', runner, width, row, starting_col, starting_row)
+        #    handle = copy_array_host_to_device_single_row(np.tile(nuclide_energy_grids[low:high], width*n_nuclides), 'nuclide_energy_grids', sdk, width, row, starting_col, starting_row)
         #    handles.append(handle)
 
         print("  Transferring nuclide XS grids from host -> device...")
-        #handle = copy_array_host_to_device(conv_nuclide_xs, 'nuclide_xs_data', runner, width, height, starting_col, starting_row)
+        #handle = copy_array_host_to_device(conv_nuclide_xs, 'nuclide_xs_data', sdk, width, height, starting_col, starting_row)
         #handles.append(handle)
         #xs_buf_size = height * width * n_nuclides * n_gridpoints_per_nuclide * xs
         #e_buf_size = height * width * n_nuclides * n_gridpoints_per_nuclide
@@ -636,7 +601,7 @@ for tile_row in range(tile_height):
             #print("Assigning PE row = %d, col = %d" %(row, col))
             #print(data)
             xs_buf = np.append(xs_buf,data)
-            #handle = copy_array_host_to_device(data, 'nuclide_xs_data', runner, 1, 1, starting_col+col, starting_row+row)
+            #handle = copy_array_host_to_device(data, 'nuclide_xs_data', sdk, 1, 1, starting_col+col, starting_row+row)
             #handles.append(handle)
 
             # what energy data do I need?
@@ -647,13 +612,13 @@ for tile_row in range(tile_height):
             #print("energy data:")
             #print(edata)
             e_buf = np.append(e_buf, edata)
-            #handle = copy_array_host_to_device(edata, 'nuclide_energy_grids', runner, 1, 1, starting_col+col, starting_row+row)
+            #handle = copy_array_host_to_device(edata, 'nuclide_energy_grids', sdk, 1, 1, starting_col+col, starting_row+row)
             #handles.append(handle)
 
         
-        handle = copy_array_host_to_device(xs_buf, 'nuclide_xs_data', runner, width, height, starting_col, starting_row)
+        handle = copy_array_host_to_device(xs_buf, 'nuclide_xs_data', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
-        handle = copy_array_host_to_device(e_buf, 'nuclide_energy_grids', runner, width, height, starting_col, starting_row)
+        handle = copy_array_host_to_device(e_buf, 'nuclide_energy_grids', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
 
 
@@ -664,12 +629,12 @@ for tile_row in range(tile_height):
         for col in range(width):
             start = n_nuclides * col
             stop = start + n_nuclides
-            handle = copy_array_host_to_device_single_column(np.tile(densities[start:stop], height), 'densities', runner, height, col, starting_col, starting_row)
+            handle = copy_array_host_to_device_single_column(np.tile(densities[start:stop], height), 'densities', sdk, height, col, starting_col, starting_row)
             handles.append(handle)
 
 
         print("  Transferring contiguous particle arrays from host -> device...")
-        handle = copy_array_host_to_device(particle_contiguous, 'particle', runner, width, height, starting_col, starting_row)
+        handle = copy_array_host_to_device(particle_contiguous, 'particle', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
 
 print("Blocking for host -> device transfers to complete...")
@@ -688,7 +653,7 @@ time_start = time.time()
 
 # Run XS lookup kernel on the device
 print("Executing XS lookup kernel on device...")
-runner.launch('start_simulation', nonblock=False)
+sdk.launch('start_simulation', nonblock=False)
 
 # Stop python host timer
 time_stop = time.time()
@@ -711,7 +676,7 @@ if VALIDATE_RESULTS:
             starting_row = tile_row * height
 
             # Copy results (particle XS data) back to the host for validation
-            handle = copy_array_device_to_host(particle_contiguous_return[tile_row, tile_col,:], 'particle_finished', runner, width, height, starting_col, starting_row)
+            handle = copy_array_device_to_host(particle_contiguous_return[tile_row, tile_col,:], 'particle_finished', sdk, width, height, starting_col, starting_row)
             handles.append(handle)
             if(tile_row == 0 and tile_col == 0):
                 print("Kernel complete!")
@@ -730,12 +695,12 @@ if VALIDATE_RESULTS:
 # array to be 32 bits.
 timestamps = np.zeros(tile_height*tile_width*9*n_PE, dtype=np.uint32)
 print("Transferring all hardware counter data from device -> host...")
-handle = copy_array_device_to_host_16_bit(timestamps, 'timestamps', runner, width*tile_width, height*tile_height)
+handle = copy_array_device_to_host_16_bit(timestamps, 'timestamps', sdk, width*tile_width, height*tile_height)
 #runner.task_wait(handle)
 
 # Stop the program
 print("Terminating program runner...")
-runner.stop()
+sdk.stop()
 
 ######################################
 # Create Particle objects to sort
