@@ -3,6 +3,9 @@
 
 This repository contains several implementations of the continuous energy Monte Carlo cross section lookup kernel.
 
+See the [sdkwrapper README](sdkwrapper/README.md) for instructions on setting up the
+environment to run the code, and the .sh script in each subdirectory.
+
 
 ## 1. CSL Full Implementation
 
