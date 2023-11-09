@@ -32,7 +32,7 @@ ASSUME_PERFECT_LOAD_BALANCE = False
 # Note: validation not expected to work when using stochastic interpolation,
 # as this mode uses the Cerebras hardware generator, which is not
 # reproducible on the host.
-VALIDATE_RESULTS = False
+VALIDATE_RESULTS = True
 
 #####################################################################
 # I/O helper functions
@@ -221,16 +221,37 @@ def init_xs_data_unique(n_nuclides, n_gridpoints_per_nuclide, n_xs, width, heigh
     # I.e., we just sample n gridpoints once, then assign the same grid to all nuclides
     #egrid = np.random.random(n_gridpoints_per_nuclide*height).astype(np.float32)
 
+    bands = np.linspace(0.0, 1.0, height+1, dtype=np.float32)
+    for i in range(n_nuclides * width):
+        for band in range(height):
+            lower = bands[band]
+            higher = bands[band+1]
+            egrid = (higher-lower) * np.random.random(n_gridpoints_per_nuclide).astype(np.float32) + lower
+            egrid = np.sort(egrid)
+            egrid[0] = lower
+            egrid[n_gridpoints_per_nuclide-1] = higher
+
+            low = i*n_gridpoints_per_nuclide*height + band * n_gridpoints_per_nuclide
+            high = low + n_gridpoints_per_nuclide
+            nuclide_energy_grids[low:high] = egrid
+            #print(egrid)
+    #print(nuclide_energy_grids)
+
     # Using an even distribution of gridpoints makes more sense, as this is reduces unrealistic variance in the row widths
-    egrid = np.linspace(0.0, 1.0, n_gridpoints_per_nuclide * height, dtype=np.float32)
+    #egrid = np.linspace(0.0, 1.0, n_gridpoints_per_nuclide * height, dtype=np.float32)
+
     # Sort nuclide energy grid
-    egrid = np.sort(egrid)
+    #egrid = np.sort(egrid)
     
     # assign replicated nuclide energy grid
-    for i in range(n_nuclides * width):
-        low = i*n_gridpoints_per_nuclide*height
-        high = low + n_gridpoints_per_nuclide * height
-        nuclide_energy_grids[low:high] = egrid
+    #for i in range(n_nuclides * width):
+    #    low = i*n_gridpoints_per_nuclide*height
+    #    high = low + n_gridpoints_per_nuclide * height
+    #    for band in range(height):
+        # randomize interior elements
+
+
+        #nuclide_energy_grids[low:high] = egrid
 
     #print("egrid")
     #print(egrid)
