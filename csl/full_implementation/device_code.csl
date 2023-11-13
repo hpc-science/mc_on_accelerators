@@ -92,6 +92,10 @@ var nuclide_xs_data:      [n_nuclides * n_gridpoints_per_nuclide * n_xs] f32;
 var densities:            [n_nuclides] f32;
 //var densities_rep:        [n_nuclides*n_xs] f32;
 
+// Fractional Cascading arrays
+var next_lower: [n_nuclides * n_gridpoints_per_nuclide] f32;
+var next_upper: [n_nuclides * n_gridpoints_per_nuclide] f32;
+
 // Particles are stored contiguously as an energy variable plus five xs points
 const par_sz: i16 = 1 + n_xs;
 const par_szu: u16 = 1 + @as(u16,n_xs);
@@ -128,6 +132,8 @@ var nuclide_energy_grids_ptr: [*] f32 = &nuclide_energy_grids;
 var nuclide_xs_data_ptr: [*] f32      = &nuclide_xs_data;
 var densities_ptr: [*] f32            = &densities;
 var particle_finished_ptr: [*] f32    = &particle_finished;
+var next_lower_ptr: [*] f32           = &next_lower;
+var next_upper_ptr: [*] f32           = &next_upper;
 
 // Make an array holding the two timetamps (start and stop).
 // Timestamps in CSL are very weird, being 48-bits via an array of
@@ -1117,6 +1123,8 @@ comptime {
   @export_symbol(timestamps_ptr, "timestamps");
   @export_symbol(current_n_particles_in_ptr, "current_n_particles");
   @export_symbol(particle_finished_ptr, "particle_finished");
+  @export_symbol(next_lower_ptr, "next_lower");
+  @export_symbol(next_upper_ptr, "next_upper");
 
   // Export function so it is host-callable by RPC mechanism
   @export_symbol(start_simulation);

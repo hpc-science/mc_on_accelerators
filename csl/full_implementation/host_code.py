@@ -156,6 +156,25 @@ def iterative_binary_search(arr, quarry):
 
     return lowerLimit
 
+def iterative_binary_search_upper(arr, quarry):
+    n = arr.size
+    lowerLimit = 0
+    upperLimit = n-1
+    examinationPoint = 0
+    length = upperLimit - lowerLimit;
+
+    while length > 1 :
+        examinationPoint = lowerLimit + ( length // 2 );
+
+        if arr[examinationPoint] > quarry:
+            upperLimit = examinationPoint
+        else:
+            lowerLimit = examinationPoint
+
+        length = upperLimit - lowerLimit
+
+    return upperLimit
+
 
 # Performs the same lookup operation that will occur on the Cerebras,
 # so as to have a basis for checking for correctness.
@@ -179,6 +198,50 @@ def calculate_xs_reference(n_starting_particles_per_pe, n_nuclides, n_gridpoints
                 xs_lower = nuclide_xs_data[n * n_gridpoints_per_nuclide * n_xs + lower_index * n_xs + xs]
                 xs_higher = nuclide_xs_data[n * n_gridpoints_per_nuclide * n_xs + (lower_index + 1) * n_xs + xs]
                 particle_xs_expected[p*n_xs + xs] += densities[n] * (xs_higher - f * (xs_higher - xs_lower) )
+
+    return particle_xs_expected
+
+# Performs the same lookup operation that will occur on the Cerebras,
+# so as to have a basis for checking for correctness.
+def calculate_xs_reference_fc(n_starting_particles_per_pe, n_nuclides, n_gridpoints_per_nuclide, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height, next_lower, next_upper) :
+    particle_xs_expected = np.zeros(n_starting_particles_per_pe * n_xs, dtype=np.float32)
+    #print("NEG = ")
+    print(nuclide_energy_grids)
+    for p in range(n_starting_particles_per_pe):
+        e = particle_e[p]
+        hint_lower = 0
+        hint_upper = 0
+        for n in range(n_nuclides):
+            low = 0
+            high = 0
+
+            # If this is the first nuclide, need to do a full scope binary search
+            if n == 0:
+                low = n*n_gridpoints_per_nuclide
+                high = low + n_gridpoints_per_nuclide
+            # Otherwise, use fractional cascade index, then do binary search
+            else:
+                low = n*n_gridpoints_per_nuclide + hint_lower
+                high = n*n_gridpoints_per_nuclide + hint_upper + 1
+            
+            lower_index = hint_lower + iterative_binary_search(nuclide_energy_grids[low:high], e)
+            #print("Searching for %.5e between %d and %d, hit index lower = %d" % (e, low, high, lower_index))
+ 
+            # Interpolation factor
+            e_lower = nuclide_energy_grids[n * n_gridpoints_per_nuclide + lower_index]
+            e_higher = nuclide_energy_grids[n * n_gridpoints_per_nuclide + lower_index + 1]
+            #print("lower = %.5e higher = %.5e" %(e_lower, e_higher))
+            f = (e_higher - e) / (e_higher - e_lower)
+ 
+            # Lookup xs data, interpolate, and store to particle array
+            for xs in range(n_xs):
+                xs_lower = nuclide_xs_data[n * n_gridpoints_per_nuclide * n_xs + lower_index * n_xs + xs]
+                xs_higher = nuclide_xs_data[n * n_gridpoints_per_nuclide * n_xs + (lower_index + 1) * n_xs + xs]
+                particle_xs_expected[p*n_xs + xs] += densities[n] * (xs_higher - f * (xs_higher - xs_lower) )
+
+            # Store hint for next nuclide lookup
+            hint_lower = next_lower[n * n_gridpoints_per_nuclide + lower_index]
+            hint_upper = next_upper[n * n_gridpoints_per_nuclide + lower_index]
 
     return particle_xs_expected
 
@@ -268,6 +331,48 @@ def init_xs_data_unique(n_nuclides, n_gridpoints_per_nuclide, n_xs, width, heigh
     densities              = np.random.random(n_nuclides * width).astype(np.float32)
 
     return nuclide_energy_grids, nuclide_xs_data, densities
+
+def init_fc(nuclide_energy_grids, n_nuclides, n_gridpoints_per_nuclide, width, height):
+    n_nuclides = n_nuclides * width
+    n_gridpoints_per_nuclide = height * n_gridpoints_per_nuclide
+
+    next_lower = np.zeros(n_gridpoints_per_nuclide * n_nuclides, dtype=np.float32)
+    next_upper = np.zeros(n_gridpoints_per_nuclide * n_nuclides, dtype=np.float32)
+
+    for n in range(n_nuclides):
+        n_right = (n+1) % n_nuclides
+        for e in range(n_gridpoints_per_nuclide):
+            # This is the current energy gridpoint we are considering
+            energy = nuclide_energy_grids[n*n_gridpoints_per_nuclide + e]
+
+            # search for lower bounding index in the next nuclide's grid
+            lb = 0
+            if e > 0:
+                low = n_right*n_gridpoints_per_nuclide
+                high = low + n_gridpoints_per_nuclide
+                lb = iterative_binary_search(nuclide_energy_grids[low:high], energy)
+
+            next_lower[n*n_gridpoints_per_nuclide + e] = lb
+
+            # Determine which energy should be used to form the upper bound
+            e_u = 0
+            if e == n_gridpoints_per_nuclide - 1:
+                e_u = energy
+            else:
+                e_u = nuclide_energy_grids[n*n_gridpoints_per_nuclide + e + 1]
+
+            # Find the upper bound
+            ub = 0
+            if ub < n_gridpoints_per_nuclide - 1 :
+                low = n_right*n_gridpoints_per_nuclide
+                high = low + n_gridpoints_per_nuclide
+                ub = iterative_binary_search_upper(nuclide_energy_grids[low:high], e_u)
+            else:
+                ub = n_gridpoints_per_nuclide -1;
+
+            next_upper[n*n_gridpoints_per_nuclide + e] = ub
+
+    return next_lower, next_upper
 
 # The below two functions are needed for mapping the generate XS data into the format
 # that is expected for the host -> device mempy function. This logic is tricky due to the way
@@ -508,6 +613,12 @@ print("Initializing XS data on host...")
 nuclide_energy_grids, nuclide_xs_data, densities = init_xs_data_unique(n_nuclides, n_gridpoints_per_nuclide, n_xs, width, height)
 neg_2D = np.reshape(nuclide_energy_grids, (n_nuclides * width, n_gridpoints_per_nuclide * height))
 
+next_lower, next_upper = init_fc(nuclide_energy_grids, n_nuclides, n_gridpoints_per_nuclide, width, height)
+#print(next_lower)
+#print(next_upper)
+next_lower_2D = np.reshape(next_lower, (n_nuclides * width, n_gridpoints_per_nuclide * height))
+next_upper_2D = np.reshape(next_upper, (n_nuclides * width, n_gridpoints_per_nuclide * height))
+
 # If we wanted instead to have the same XS data on all PE's, we could use the below function
 #nuclide_energy_grids, nuclide_xs_data, densities, seed = init_xs_data_replicated(n_nuclides, n_gridpoints_per_nuclide, n_xs, seed)
 
@@ -529,6 +640,13 @@ reference_particles = []
 if VALIDATE_RESULTS:
     print("Computing reference solution on host...")
     particle_xs_expected = calculate_xs_reference(n_starting_particles_per_pe*width*height, n_nuclides*width, n_gridpoints_per_nuclide*height, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height)
+    
+    #particle_xs_expected_fc = calculate_xs_reference_fc(n_starting_particles_per_pe*width*height, n_nuclides*width, n_gridpoints_per_nuclide*height, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height, next_lower, next_upper)
+
+    #print("REFERENCE SOLUTION")
+    #print(particle_xs_expected)
+    #print("FC SOLUTION")
+    #print(particle_xs_expected_fc)
 
     # Build reference particle objects, and sort them in energy for later comparison to CS2 solution
     for p in range(particle_e.size):
@@ -608,6 +726,8 @@ for tile_row in range(tile_height):
         #e_buf = np.zeros(e_buf_size, dtype=npfloat32)
         xs_buf = np.array([],dtype=np.float32)
         e_buf = np.array([],dtype=np.float32)
+        next_lower_buf = np.array([],dtype=np.float32)
+        next_upper_buf = np.array([],dtype=np.float32)
         for row in range(height):
             #for col in range(width):
 
@@ -637,10 +757,24 @@ for tile_row in range(tile_height):
             #handle = copy_array_host_to_device(edata, 'nuclide_energy_grids', sdk, 1, 1, starting_col+col, starting_row+row)
             #handles.append(handle)
 
+            ldata = next_lower_2D[:, elow:ehigh]
+            ldata = np.ravel(ldata)
+            next_lower_buf = np.append(next_lower_buf, ldata)
+            
+            udata = next_upper_2D[:, elow:ehigh]
+            udata = np.ravel(udata)
+            next_upper_buf = np.append(next_upper_buf, udata)
+
         
         handle = copy_array_host_to_device(xs_buf, 'nuclide_xs_data', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
         handle = copy_array_host_to_device(e_buf, 'nuclide_energy_grids', sdk, width, height, starting_col, starting_row)
+        handles.append(handle)
+        
+        handle = copy_array_host_to_device(next_lower_buf, 'next_lower', sdk, width, height, starting_col, starting_row)
+        handles.append(handle)
+        
+        handle = copy_array_host_to_device(next_upper_buf, 'next_upper', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
 
 

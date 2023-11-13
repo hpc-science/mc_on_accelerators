@@ -181,6 +181,9 @@ layout {
   @export_name("current_n_particles", [*]u16, true);
   @export_name("particle_finished", [*]f32, true);
 
+  @export_name("next_lower", [*]f32, true);
+  @export_name("next_upper", [*]f32, true);
+
   // Export host-callable device function
   @export_name("start_simulation", fn()void);
 }
