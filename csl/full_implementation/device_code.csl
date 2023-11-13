@@ -346,8 +346,8 @@ fn calculate_xs() void {
         }
         //hint_lower = @as(i16, next_lower[lower_index]);
         //hint_upper = @as(i16, next_upper[lower_index]);
-        hint_lower = next_lower[lower_index];
-        hint_upper = next_upper[lower_index];
+        hint_lower = next_lower[lower_index] % n_gridpoints_per_nuclide;
+        hint_upper = next_upper[lower_index] % n_gridpoints_per_nuclide;
       } else {
         // Do binary search
         lower_index = iterative_binary_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);

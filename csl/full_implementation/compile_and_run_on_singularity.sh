@@ -9,7 +9,7 @@ set -xe
 
 # Define PE grid dimensions
 WIDTH=1 # The width also affects the number of nuclides. E.g., total nuclides = WIDTH * NNUCLIDES)
-HEIGHT=1
+HEIGHT=2
 
 # Define Cross Section lookup parameters
 NPARTICLES=5 # starting particles per PE
