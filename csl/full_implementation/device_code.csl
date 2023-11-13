@@ -75,6 +75,7 @@ param particle_buffer_multiplier: u16;
 var enable_diffusion : bool = true;
 const use_rng_interp: bool = false;
 const use_dsd_interp: bool = false;
+const use_fc: bool = true;
 
 // Scalars (represented as 1 length arrays, to allow for DSD creation)
 // Representing the number of current particles in the input/output comms buffers
@@ -263,9 +264,23 @@ fn calculate_xs() void {
     var p_offset: i16 = p*par_sz;
     var e: f32 = particle_in[p_offset];
     var n: i16 = 0;
+    var hint_lower: i16 = 0;
+    var hint_upper: i16 = 0;
   	for (@range(i16, n_nuclides)) |n| {
-      // Do binary search
-      var lower_index: i16 = iterative_binary_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);
+      var lower_index: i16;
+      if( use_fc ) {
+        if( n == 0 ) {
+          // Do binary search
+          lower_index = iterative_binary_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);
+        } else {
+          lower_index = iterative_binary_search(e, n * n_gridpoints_per_nuclide + hint_lower, n * n_gridpoints_per_nuclide + hint_upper + 1);
+        }
+        hint_lower = @as(i16, next_lower[lower_index]);
+        hint_upper = @as(i16, next_upper[lower_index]);
+      } else {
+        // Do binary search
+        lower_index = iterative_binary_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);
+      }
 
       // Alternate (not in use): do sequential search instead of binary search
       //var lower_index: i16 = sequential_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);

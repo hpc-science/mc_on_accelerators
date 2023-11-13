@@ -8,7 +8,7 @@ set -xe
 # simulator or device.
 
 # Define PE grid dimensions
-WIDTH=2 # The width also affects the number of nuclides. E.g., total nuclides = WIDTH * NNUCLIDES)
+WIDTH=1 # The width also affects the number of nuclides. E.g., total nuclides = WIDTH * NNUCLIDES)
 HEIGHT=2
 
 # Define Cross Section lookup parameters
