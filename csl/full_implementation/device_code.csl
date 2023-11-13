@@ -74,9 +74,9 @@ var pe_col: i16;
 param particle_buffer_multiplier: u16;
 
 var enable_diffusion : bool = true;
-const use_rng_interp: bool = true;
-const use_dsd_interp: bool = true;
-const use_fc: bool = false;
+const use_rng_interp: bool = false;
+const use_dsd_interp: bool = false;
+const use_fc: bool = true;
 
 // Scalars (represented as 1 length arrays, to allow for DSD creation)
 // Representing the number of current particles in the input/output comms buffers
