@@ -34,7 +34,7 @@ ASSUME_PERFECT_LOAD_BALANCE = False
 # reproducible on the host.
 VALIDATE_RESULTS = True
 
-READ_PRINTF = True
+READ_PRINTF = False
 
 READ_TIMESTAMPS = False
 
@@ -630,8 +630,8 @@ next_lower, next_upper = init_fc(nuclide_energy_grids, n_nuclides, n_gridpoints_
 next_lower_2D = np.reshape(next_lower, (n_nuclides * width, n_gridpoints_per_nuclide * height))
 next_upper_2D = np.reshape(next_upper, (n_nuclides * width, n_gridpoints_per_nuclide * height))
 
-print(next_lower_2D)
-print(next_upper_2D)
+#print(next_lower_2D)
+#print(next_upper_2D)
 
 # If we wanted instead to have the same XS data on all PE's, we could use the below function
 #nuclide_energy_grids, nuclide_xs_data, densities, seed = init_xs_data_replicated(n_nuclides, n_gridpoints_per_nuclide, n_xs, seed)
