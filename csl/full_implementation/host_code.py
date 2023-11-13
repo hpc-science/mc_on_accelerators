@@ -34,6 +34,10 @@ ASSUME_PERFECT_LOAD_BALANCE = False
 # reproducible on the host.
 VALIDATE_RESULTS = True
 
+READ_PRINTF = False
+
+READ_TIMESTAMPS = False
+
 #####################################################################
 # I/O helper functions
 #####################################################################
@@ -75,6 +79,13 @@ def copy_array_host_to_device(arr, name, sdk, width, height, starting_col=0, sta
     elements_per_pe = np.int32(arr.size / (width * height))
     handle = sdk.memcpy_h2d(symbol, arr, starting_col, starting_row, width, height, elements_per_pe, streaming=False,
             order=sdk.MemcpyOrder.ROW_MAJOR, data_type=sdk.MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+    return handle
+
+def copy_array_host_to_device_16_bit(arr, name, sdk, width, height, starting_col=0, starting_row=0):
+    symbol = sdk.get_id(name)
+    elements_per_pe = np.int32(arr.size / (width * height))
+    handle = sdk.memcpy_h2d(symbol, arr, starting_col, starting_row, width, height, elements_per_pe, streaming=False,
+            order=sdk.MemcpyOrder.ROW_MAJOR, data_type=sdk.MemcpyDataType.MEMCPY_16BIT, nonblock=False)
     return handle
 
 def copy_array_host_to_device_COL(arr, name, sdk, width, height):
@@ -336,8 +347,8 @@ def init_fc(nuclide_energy_grids, n_nuclides, n_gridpoints_per_nuclide, width, h
     n_nuclides = n_nuclides * width
     n_gridpoints_per_nuclide = height * n_gridpoints_per_nuclide
 
-    next_lower = np.zeros(n_gridpoints_per_nuclide * n_nuclides, dtype=np.float32)
-    next_upper = np.zeros(n_gridpoints_per_nuclide * n_nuclides, dtype=np.float32)
+    next_lower = np.zeros(n_gridpoints_per_nuclide * n_nuclides, dtype=np.int16)
+    next_upper = np.zeros(n_gridpoints_per_nuclide * n_nuclides, dtype=np.int16)
 
     for n in range(n_nuclides):
         n_right = (n+1) % n_nuclides
@@ -771,10 +782,10 @@ for tile_row in range(tile_height):
         handle = copy_array_host_to_device(e_buf, 'nuclide_energy_grids', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
         
-        handle = copy_array_host_to_device(next_lower_buf, 'next_lower', sdk, width, height, starting_col, starting_row)
+        handle = copy_array_host_to_device_16_bit(next_lower_buf, 'next_lower', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
         
-        handle = copy_array_host_to_device(next_upper_buf, 'next_upper', sdk, width, height, starting_col, starting_row)
+        handle = copy_array_host_to_device_16_bit(next_upper_buf, 'next_upper', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
 
 
@@ -869,23 +880,54 @@ sdk.stop()
 
 print("Reading simulator traces...")
 #Read the simulator trace (only works in simulator, not on real CS2 hardware)
-#debug_mod = debug_util(args.name)
+#debug_mod = sdk.debug_mod
 #trace_cycles = []
 #sort_cycles = []
 #round_robin_cycles = []
-#for y in range(1, 1 + height):
-#    for x in range(4, 4 + width):
-#        #trace_output = debug_mod.read_trace(x, y, 'my_trace')
-#        #trace_cycles.append( trace_output[2] - trace_output[0] )
-#        #sort_cycles.append( trace_output[1] - trace_output[0] )
-#        #round_robin_cycles.append( trace_output[2] - trace_output[1] )
-#
-#       # Note that reading printf trace output will fail if
-#       # there are no printf statements, so this is commented out
-#
-#        printf_output = debug_mod.read_trace(x,y,'printf')
-#        print("(",y-1,",",x-4,")")
-#        print(printf_output)
+#debug_mod = debug_util('out')
+
+if READ_PRINTF:
+    for y in range(1, 1 + height):
+        for x in range(4, 4 + width):
+            #trace_output = debug_mod.read_trace(x, y, 'my_trace')
+            #trace_cycles.append( trace_output[2] - trace_output[0] )
+            #sort_cycles.append( trace_output[1] - trace_output[0] )
+            #round_robin_cycles.append( trace_output[2] - trace_output[1] )
+
+           # Note that reading printf trace output will fail if
+           # there are no printf statements, so this is commented out
+
+            printf_output = sdk.debug_mod.read_trace(x,y,'printf')
+            #printf_output = debug_mod.read_trace(x,y,'printf')
+            print("(",y-1,",",x-4,")")
+            print(printf_output)
+
+if READ_TIMESTAMPS:
+    for y in range(1, 1 + height):
+        for x in range(4, 4 + width):
+            print("(",y-1,",",x-4,")")
+            trace_output = sdk.debug_mod.read_trace(x, y, 'my_trace')
+            print(trace_output)
+            last = 0
+            for p in range(n_starting_particles_per_pe):
+                for n in range(n_nuclides):
+                    for t in range(3):
+                        time = trace_output[p*n_nuclides*3 + n*3 + t]
+                        #if t == 0:
+                        #    print("Time for XS:     ", p,n,t,trace_output[p * n_nuclides*3 + n*3 + t] - last)
+                        if t == 1:
+                            print("Time for Search: ", p,n,t,trace_output[p * n_nuclides*3 + n*3 + t] - last)
+                        #else:
+                        #    print("Time for Interp: ", p,n,t,trace_output[p * n_nuclides*3 + n*3 + t] - last)
+                        last = time 
+
+           # Note that reading printf trace output will fail if
+           # there are no printf statements, so this is commented out
+
+            #printf_output = sdk.debug_mod.read_trace(x,y,'printf')
+            #printf_output = debug_mod.read_trace(x,y,'printf')
+            #print("(",y-1,",",x-4,")")
+            #print(printf_output)
 
 #trace_cycles = max(trace_cycles)
 #sort_cycles = max(sort_cycles)

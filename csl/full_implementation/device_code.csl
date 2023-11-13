@@ -36,7 +36,8 @@ const tsc = @import_module("<time>");
 const random = @import_module("<random>");
 
 //const my_trace = @import_module("<debug>", .{.buffer_size = 500});
-const printf = @import_module("<debug>", .{.buffer_size = 500});
+const printf = @import_module("<debug>", .{.buffer_size = 5000});
+const my_trace = @import_module("<debug>", .{.buffer_size = 5000});
 const layout_module = @import_module("<layout>");
 
 
@@ -73,8 +74,8 @@ var pe_col: i16;
 param particle_buffer_multiplier: u16;
 
 var enable_diffusion : bool = true;
-const use_rng_interp: bool = false;
-const use_dsd_interp: bool = false;
+const use_rng_interp: bool = true;
+const use_dsd_interp: bool = true;
 const use_fc: bool = true;
 
 // Scalars (represented as 1 length arrays, to allow for DSD creation)
@@ -94,8 +95,8 @@ var densities:            [n_nuclides] f32;
 //var densities_rep:        [n_nuclides*n_xs] f32;
 
 // Fractional Cascading arrays
-var next_lower: [n_nuclides * n_gridpoints_per_nuclide] f32;
-var next_upper: [n_nuclides * n_gridpoints_per_nuclide] f32;
+var next_lower: [n_nuclides * n_gridpoints_per_nuclide] i16;
+var next_upper: [n_nuclides * n_gridpoints_per_nuclide] i16;
 
 // Particles are stored contiguously as an energy variable plus five xs points
 const par_sz: i16 = 1 + n_xs;
@@ -133,8 +134,8 @@ var nuclide_energy_grids_ptr: [*] f32 = &nuclide_energy_grids;
 var nuclide_xs_data_ptr: [*] f32      = &nuclide_xs_data;
 var densities_ptr: [*] f32            = &densities;
 var particle_finished_ptr: [*] f32    = &particle_finished;
-var next_lower_ptr: [*] f32           = &next_lower;
-var next_upper_ptr: [*] f32           = &next_upper;
+var next_lower_ptr: [*] i16           = &next_lower;
+var next_upper_ptr: [*] i16           = &next_upper;
 
 // Make an array holding the two timetamps (start and stop).
 // Timestamps in CSL are very weird, being 48-bits via an array of
@@ -206,6 +207,7 @@ fn iterative_binary_search(quarry : f32, ll : i16, ul : i16) i16 {
   var examinationPoint: i16;
   var length: i16 = upperLimit - lowerLimit;
 
+  //var iter: i16 = 1;
   while ( length > 1 ) {
     examinationPoint = lowerLimit + ( length / 2 );
 
@@ -216,8 +218,10 @@ fn iterative_binary_search(quarry : f32, ll : i16, ul : i16) i16 {
     }
 
     length = upperLimit - lowerLimit;
+    //iter += 1;
   }
 
+  //printf.trace(iter);
   return lowerLimit;
 }
 
@@ -228,12 +232,31 @@ fn iterative_binary_search(quarry : f32, ll : i16, ul : i16) i16 {
 // over the binary search for small #'s of gridpoints.
 fn sequential_search(quarry : f32, ll : i16, ul : i16) i16 {
   var i: i16 = ll + 1;
+  //var iter: i16 = 1;
   while (i < ul) : (i += 1) {
     if( quarry < nuclide_energy_grids[i] ) {
+      //printf.trace(iter);
       return i-1;
     }
+    //iter += 1;
   }
+  //printf.trace(iter);
   return ul-2;
+}
+
+fn sequential_search_unbounded(quarry : f32, ll : i16) i16 {
+  var i: i16 = ll + 1;
+  //var iter: i16 = 1;
+  while (true) : (i += 1) {
+    if( quarry < nuclide_energy_grids[i] ) {
+      //printf.trace(iter);
+      return i-1;
+    }
+    //iter += 1;
+  }
+  //printf.trace(iter);
+  //return ul-2;
+  return ll;
 }
 
 var seed : u32 = 42;
@@ -266,21 +289,70 @@ fn calculate_xs() void {
     var n: i16 = 0;
     var hint_lower: i16 = 0;
     var hint_upper: i16 = 0;
+          //printf.trace_string("e");
+          //printf.trace(e);
   	for (@range(i16, n_nuclides)) |n| {
+      //my_trace.trace_timestamp(); // ONE
       var lower_index: i16;
       if( use_fc ) {
         if( n == 0 ) {
           // Do binary search
+          //printf.trace_string("n");
+          //printf.trace(n);
+          //printf.trace_string("l");
+          //printf.trace(n * n_gridpoints_per_nuclide);
+          //printf.trace_string("u");
+          //printf.trace((n+1) * n_gridpoints_per_nuclide);
           lower_index = iterative_binary_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);
+          //lower_index = 0;
+          //printf.trace_string("lb");
+          //printf.trace(lower_index);
         } else {
-          lower_index = iterative_binary_search(e, n * n_gridpoints_per_nuclide + hint_lower, n * n_gridpoints_per_nuclide + hint_upper + 1);
+          //printf.trace_string("n");
+          //printf.trace(n);
+          //printf.trace_string("l");
+          //printf.trace(n * n_gridpoints_per_nuclide + hint_lower);
+          //printf.trace_string("u");
+          //printf.trace(n * n_gridpoints_per_nuclide + hint_upper + 1);
+          const base: i16 = n * n_gridpoints_per_nuclide;
+          lower_index = iterative_binary_search(e, base + hint_lower, base + hint_upper + 1);
+          //lower_index = 0;
+          //lower_index = sequential_search(e, base + hint_lower, base + hint_upper + 1);
+          //lower_index = sequential_search_unbounded(e, base + hint_lower);
+          //lower_index = hint_lower;
+          //printf.trace_string("lb");
+          //printf.trace(lower_index);
+          // Inline seearch
+
+         // {
+         //   var lowerLimit: i16 = base + hint_lower;
+         //   var upperLimit: i16 = base + hint_upper;
+         //   var examinationPoint: i16;
+         //   var length: i16 = upperLimit - lowerLimit;
+         //   while ( length > 1 ) {
+         //     examinationPoint = lowerLimit + ( length / 2 );
+
+         //     if( nuclide_energy_grids[examinationPoint] > e ) {
+         //       upperLimit = examinationPoint;
+         //     } else {
+         //       lowerLimit = examinationPoint;
+         //     }
+
+         //     length = upperLimit - lowerLimit;
+         //   }
+         //   lower_index = lowerLimit;
+         // }
+
         }
-        hint_lower = @as(i16, next_lower[lower_index]);
-        hint_upper = @as(i16, next_upper[lower_index]);
+        //hint_lower = @as(i16, next_lower[lower_index]);
+        //hint_upper = @as(i16, next_upper[lower_index]);
+        hint_lower = next_lower[lower_index];
+        hint_upper = next_upper[lower_index];
       } else {
         // Do binary search
         lower_index = iterative_binary_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);
       }
+      // my_trace.trace_timestamp(); // TWO
 
       // Alternate (not in use): do sequential search instead of binary search
       //var lower_index: i16 = sequential_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);
@@ -300,6 +372,7 @@ fn calculate_xs() void {
       } else {
         f = (e_higher - e) / (e_higher - e_lower);
       }
+      //my_trace.trace_timestamp(); // THREE
 
       if (use_dsd_interp) {
         var nuclide_xs_data_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{n_xs} -> nuclide_xs_data[i] });
