@@ -15,7 +15,7 @@ HEIGHT=1
 NPARTICLES=5 # starting particles per PE
 NNUCLIDES=5 # this is the number of nuclides per PE in a row (e.g., total nuclides = WIDTH * NNUCLIDES)
 NGRIDPOINTS=100 # Number of gridpoints per PE (e.g., the number of gridpoints in that energy band)
-NXS=1 # Number of XS lookups. Should always be 5.
+NXS=5 # Number of XS lookups. Should always be 5.
 
 TILE_WIDTH=1
 TILE_HEIGHT=1

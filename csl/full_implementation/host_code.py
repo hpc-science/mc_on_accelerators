@@ -34,7 +34,7 @@ ASSUME_PERFECT_LOAD_BALANCE = False
 # reproducible on the host.
 VALIDATE_RESULTS = True
 
-READ_PRINTF = False
+READ_PRINTF = True
 
 READ_TIMESTAMPS = False
 
@@ -383,7 +383,7 @@ def init_fc(nuclide_energy_grids, n_nuclides, n_gridpoints_per_nuclide, width, h
 
             next_upper[n*n_gridpoints_per_nuclide + e] = ub
 
-    return next_lower, next_upper
+    return next_lower.astype(np.int16), next_upper.astype(np.int16)
 
 # The below two functions are needed for mapping the generate XS data into the format
 # that is expected for the host -> device mempy function. This logic is tricky due to the way
@@ -630,6 +630,9 @@ next_lower, next_upper = init_fc(nuclide_energy_grids, n_nuclides, n_gridpoints_
 next_lower_2D = np.reshape(next_lower, (n_nuclides * width, n_gridpoints_per_nuclide * height))
 next_upper_2D = np.reshape(next_upper, (n_nuclides * width, n_gridpoints_per_nuclide * height))
 
+print(next_lower_2D)
+print(next_upper_2D)
+
 # If we wanted instead to have the same XS data on all PE's, we could use the below function
 #nuclide_energy_grids, nuclide_xs_data, densities, seed = init_xs_data_replicated(n_nuclides, n_gridpoints_per_nuclide, n_xs, seed)
 
@@ -737,8 +740,8 @@ for tile_row in range(tile_height):
         #e_buf = np.zeros(e_buf_size, dtype=npfloat32)
         xs_buf = np.array([],dtype=np.float32)
         e_buf = np.array([],dtype=np.float32)
-        next_lower_buf = np.array([],dtype=np.float32)
-        next_upper_buf = np.array([],dtype=np.float32)
+        next_lower_buf = np.array([],dtype=np.int16)
+        next_upper_buf = np.array([],dtype=np.int16)
         for row in range(height):
             #for col in range(width):
 
@@ -782,10 +785,10 @@ for tile_row in range(tile_height):
         handle = copy_array_host_to_device(e_buf, 'nuclide_energy_grids', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
         
-        handle = copy_array_host_to_device_16_bit(next_lower_buf, 'next_lower', sdk, width, height, starting_col, starting_row)
+        handle = copy_array_host_to_device_16_bit(next_lower_buf.astype(np.int32), 'next_lower', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
         
-        handle = copy_array_host_to_device_16_bit(next_upper_buf, 'next_upper', sdk, width, height, starting_col, starting_row)
+        handle = copy_array_host_to_device_16_bit(next_upper_buf.astype(np.int32), 'next_upper', sdk, width, height, starting_col, starting_row)
         handles.append(handle)
 
 
