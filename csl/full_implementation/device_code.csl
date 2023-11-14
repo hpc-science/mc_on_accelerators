@@ -74,9 +74,9 @@ var pe_col: i16;
 param particle_buffer_multiplier: u16;
 
 var enable_diffusion : bool = true;
-const use_rng_interp: bool = false;
-const use_dsd_interp: bool = false;
-const use_fc: bool = true;
+const use_rng_interp: bool = true;
+const use_dsd_interp: bool = true;
+const use_fc: bool = false;
 
 // Scalars (represented as 1 length arrays, to allow for DSD creation)
 // Representing the number of current particles in the input/output comms buffers
@@ -132,7 +132,7 @@ var out_dsd = @get_dsd(fabout_dsd, .{
 
 // Pointer handles for host <-> device memcpy data transfers
 var particle_in_ptr: [*] f32          = &particle_in;
-var particle_in_i16_ptr = @ptrcast(i16*, particle_in_ptr);
+//var particle_in_i16_ptr = @ptrcast([pbl] i16, particle_in);
 var nuclide_energy_grids_ptr: [*] f32 = &nuclide_energy_grids;
 var nuclide_xs_data_ptr: [*] f32      = &nuclide_xs_data;
 var densities_ptr: [*] f32            = &densities;
@@ -282,6 +282,9 @@ var seed : u32 = 42;
 //  return @as(f32,seed) / @as(f32,m);
 //}
 
+// Counts the number of round-robin comm iterations we have performed
+var round_robin_comm_iter : i16 = 0;
+
 // Macroscopic XS lookup function. Accumulates macro XS data for
 // n_starting_particles_per_pe over all nuclides.
 fn calculate_xs() void {
@@ -291,105 +294,37 @@ fn calculate_xs() void {
     // Particles are stored as structs of energy + 5 xs data points, with structs contiguous in memory to form the array
     // Thus, energy elements are stored as the first entry in the struct, so have a stride of 1 + n_xs (i.e., par_sz)
     var p_offset: i16 = p*par_sz;
+    var particle_in_i16_ptr = @ptrcast([*] i16, &particle_in);
     var e: f32 = particle_in[p_offset];
     var n: i16 = 0;
-    var hint_lower: i16 = 0;
-    var hint_upper: i16 = 0;
+
+    // If we are using fractional cascading, load in the hints from the particle object
+    var hint_lower: i16;
+    var hint_upper: i16;
+    if( use_fc ) {
+        if( round_robin_comm_iter == 1 ) {
+          hint_lower = 0;
+          hint_upper = n_gridpoints_per_nuclide - 1;
+        } else {
+          hint_lower = particle_in_i16_ptr[p_offset*2 + next_lower_offset];
+          hint_upper = particle_in_i16_ptr[p_offset*2 + next_upper_offset];
+        }
+    }
+
     //printf.trace_string("e");
     //printf.trace(e);
   	for (@range(i16, n_nuclides)) |n| {
       //my_trace.trace_timestamp(); // ONE
       var lower_index: i16;
       if( use_fc ) {
-        if( n == 0 ) {
-          // Do binary search
-          //printf.trace_string("n");
-          //printf.trace(n);
-          //printf.trace_string("l");
-          //printf.trace(n * n_gridpoints_per_nuclide);
-          //printf.trace_string("u");
-          //printf.trace((n+1) * n_gridpoints_per_nuclide);
-          lower_index = iterative_binary_search(e, n * n_gridpoints_per_nuclide, (n+1) * n_gridpoints_per_nuclide);
-          //lower_index = 0;
-          //printf.trace_string("lb");
-          //printf.trace(lower_index);
-        } else {
-          //printf.trace_string("n");
-          //printf.trace(n);
-          //printf.trace_string("l");
-          //printf.trace(n * n_gridpoints_per_nuclide + hint_lower);
-          //printf.trace_string("u");
-          //printf.trace(n * n_gridpoints_per_nuclide + hint_upper + 1);
 
-          const base: i16 = n * n_gridpoints_per_nuclide;
-          lower_index = iterative_binary_search(e, base + hint_lower, base + hint_upper + 1);
-          //lower_index = sequential_search(e, base + hint_lower, base + hint_upper + 1);
+        const base: i16 = n * n_gridpoints_per_nuclide;
+        lower_index = iterative_binary_search(e, base + hint_lower, base + hint_upper + 1);
 
-      //var e_lower  : f32 = nuclide_energy_grids[lower_index];
-      //var e_higher : f32 = nuclide_energy_grids[lower_index + 1];
-      //if( e > e_higher) {
-      //  printf.trace_string("energy greater than higher (e, e_low, e_high)");
-      //  printf.trace(e);
-      //  printf.trace(e_lower);
-      //  printf.trace(e_higher);
-      //  printf.trace_string("hint base/low/high");
-      //  printf.trace(base);
-      //  printf.trace(hint_lower);
-      //  printf.trace(hint_upper+1);
-      //}
-          //lower_index = 0;
-          //lower_index = sequential_search(e, base + hint_lower, base + hint_upper + 1);
-          //lower_index = sequential_search_unbounded(e, base + hint_lower);
-          //lower_index = hint_lower;
-          //printf.trace_string("lb");
-          //printf.trace(lower_index);
-          // Inline seearch
-
-         // {
-         //   var lowerLimit: i16 = base + hint_lower;
-         //   var upperLimit: i16 = base + hint_upper;
-         //   var examinationPoint: i16;
-         //   var length: i16 = upperLimit - lowerLimit;
-         //   while ( length > 1 ) {
-         //     examinationPoint = lowerLimit + ( length / 2 );
-
-         //     if( nuclide_energy_grids[examinationPoint] > e ) {
-         //       upperLimit = examinationPoint;
-         //     } else {
-         //       lowerLimit = examinationPoint;
-         //     }
-
-         //     length = upperLimit - lowerLimit;
-         //   }
-         //   lower_index = lowerLimit;
-         // }
-
-        }
         //hint_lower = @as(i16, next_lower[lower_index]);
         //hint_upper = @as(i16, next_upper[lower_index]);
         hint_lower = next_lower[lower_index];
         hint_upper = next_upper[lower_index];
-        
-        //hint_lower = next_lower[lower_index] % n_gridpoints_per_nuclide;
-        //hint_upper = next_upper[lower_index] % n_gridpoints_per_nuclide;
-        
-        // TODO: Do this modulus on the host-side once, rather than every time here
-        //hint_lower = next_lower[lower_index] % n_gridpoints_per_nuclide;
-        //if (lower_index >= n_gridpoints_per_nuclide - 2) {
-        //  hint_upper = n_gridpoints_per_nuclide - 1;
-        //} else {
-        //  hint_upper = next_upper[lower_index] % n_gridpoints_per_nuclide;
-        //}
-
-        // OK, so to write it down clearly:
-        // 1. The grid is basically wrong due to the way we have duplicated energy grid points at the boundary
-        // 2. When building, and we are searching for the upper bound for a given gridpoint, we may search
-        // to find that we are between the last two current gridpoints (e.g., 0.46, 0.5). We will then find
-        // the point that forms the upper bound for our current upper, i.e., we search for which point is an
-        // upper bound to 0.5. As there will be two subsequent gridpoints above that are 0.5, we end up in trouble.
-        // Realistically, we actually don't want to 
-        //hint_lower = 0;
-        //hint_upper = n_gridpoints_per_nuclide;
 
       } else {
         // Do binary search
@@ -403,22 +338,6 @@ fn calculate_xs() void {
       // Compute Interpolation factor (expensive due to division)
       var e_lower  : f32 = nuclide_energy_grids[lower_index];
       var e_higher : f32 = nuclide_energy_grids[lower_index + 1];
-          
-      //if( e == e_lower ){
-      //  printf.trace_string("same as lower");
-      //}
-      //if( e == e_higher) {
-      //  printf.trace_string("same as higher");
-      //}
-      //if( e > e_higher) {
-      //  printf.trace_string("energy greater than higher (e, e_low, e_high)");
-      //  printf.trace(e);
-      //  printf.trace(e_lower);
-      //  printf.trace(e_higher);
-      //}
-      //if( e < e_lower) {
-      //  printf.trace_string("energy less than lower");
-      //}
 
       var f: f32;
 
@@ -459,6 +378,13 @@ fn calculate_xs() void {
           } // loop over XS
         }
       } // loop over nuclides
+
+      // If using FC, store out FC indexing data
+      if( use_fc ) {
+        particle_in_i16_ptr[p_offset*2 + next_lower_offset] = hint_lower;
+        particle_in_i16_ptr[p_offset*2 + next_upper_offset] = hint_upper;
+      }
+
     } // loop over particles
   }
 
@@ -562,8 +488,6 @@ task row_send() void {
 //  }
 //}
 
-// Counts the number of round-robin comm iterations we have performed
-var round_robin_comm_iter : i16 = 0;
 
 // Main task to perform XS lookups and exchange particles between neighbors.
 // One invocation means all particles currently on this PE will have contributions
