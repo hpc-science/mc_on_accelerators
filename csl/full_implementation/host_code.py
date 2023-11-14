@@ -214,6 +214,8 @@ def calculate_xs_reference(n_starting_particles_per_pe, n_nuclides, n_gridpoints
 
 # Performs the same lookup operation that will occur on the Cerebras,
 # so as to have a basis for checking for correctness.
+# TODO: NOTE that this function no longer works due to the modulusing that is done in advance
+# on the next grids. Would need to re-index the hints to make it work
 def calculate_xs_reference_fc(n_starting_particles_per_pe, n_nuclides, n_gridpoints_per_nuclide, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height, next_lower, next_upper) :
     particle_xs_expected = np.zeros(n_starting_particles_per_pe * n_xs, dtype=np.float32)
     #print("NEG = ")
@@ -636,7 +638,7 @@ print("Initializing XS data on host...")
 # Convert things to 2D/3D nicely
 nuclide_energy_grids, nuclide_xs_data, densities = init_xs_data_unique(n_nuclides, n_gridpoints_per_nuclide, n_xs, width, height)
 neg_2D = np.reshape(nuclide_energy_grids, (n_nuclides * width, n_gridpoints_per_nuclide * height))
-print(neg_2D)
+#print(neg_2D)
 next_lower, next_upper = init_fc(nuclide_energy_grids, n_nuclides, n_gridpoints_per_nuclide, width, height)
 #print(next_lower)
 #print(next_upper)
@@ -668,12 +670,12 @@ if VALIDATE_RESULTS:
     print("Computing reference solution on host...")
     particle_xs_expected = calculate_xs_reference(n_starting_particles_per_pe*width*height, n_nuclides*width, n_gridpoints_per_nuclide*height, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height)
     
-    particle_xs_expected_fc = calculate_xs_reference_fc(n_starting_particles_per_pe*width*height, n_nuclides*width, n_gridpoints_per_nuclide*height, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height, next_lower, next_upper)
+#    particle_xs_expected_fc = calculate_xs_reference_fc(n_starting_particles_per_pe*width*height, n_nuclides*width, n_gridpoints_per_nuclide*height, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height, next_lower, next_upper)
 
-    print("REFERENCE SOLUTION")
-    print(particle_xs_expected)
-    print("FC SOLUTION")
-    print(particle_xs_expected_fc)
+ #   print("REFERENCE SOLUTION")
+ #   print(particle_xs_expected)
+ #   print("FC SOLUTION")
+ #   print(particle_xs_expected_fc)
 #    np.testing.assert_allclose(particle_xs_expected, particle_xs_expected_fc, atol=0.01, rtol=0)
 
     # Build reference particle objects, and sort them in energy for later comparison to CS2 solution

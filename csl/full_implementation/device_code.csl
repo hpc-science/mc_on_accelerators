@@ -74,8 +74,8 @@ var pe_col: i16;
 param particle_buffer_multiplier: u16;
 
 var enable_diffusion : bool = true;
-const use_rng_interp: bool = true;
-const use_dsd_interp: bool = true;
+const use_rng_interp: bool = false;
+const use_dsd_interp: bool = false;
 const use_fc: bool = true;
 
 // Scalars (represented as 1 length arrays, to allow for DSD creation)
@@ -209,7 +209,10 @@ fn iterative_binary_search(quarry : f32, ll : i16, ul : i16) i16 {
 
   //var iter: i16 = 1;
   while ( length > 1 ) {
-    examinationPoint = lowerLimit + ( length / 2 );
+    //examinationPoint = lowerLimit + ( length / 2 );
+    // We replace the above with a bitshift division, but it
+    // appears compiler was already doing this
+    examinationPoint = lowerLimit + ( length >> 1 );
 
     if( nuclide_energy_grids[examinationPoint] > quarry ) {
       upperLimit = examinationPoint;
@@ -314,8 +317,11 @@ fn calculate_xs() void {
           //printf.trace(n * n_gridpoints_per_nuclide + hint_lower);
           //printf.trace_string("u");
           //printf.trace(n * n_gridpoints_per_nuclide + hint_upper + 1);
+
           const base: i16 = n * n_gridpoints_per_nuclide;
           lower_index = iterative_binary_search(e, base + hint_lower, base + hint_upper + 1);
+          //lower_index = sequential_search(e, base + hint_lower, base + hint_upper + 1);
+
       //var e_lower  : f32 = nuclide_energy_grids[lower_index];
       //var e_higher : f32 = nuclide_energy_grids[lower_index + 1];
       //if( e > e_higher) {
