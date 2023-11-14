@@ -8,11 +8,11 @@ set -xe
 # simulator or device.
 
 # Define PE grid dimensions
-WIDTH=1 # The width also affects the number of nuclides. E.g., total nuclides = WIDTH * NNUCLIDES)
+WIDTH=2 # The width also affects the number of nuclides. E.g., total nuclides = WIDTH * NNUCLIDES)
 HEIGHT=1
 
 # Define Cross Section lookup parameters
-NPARTICLES=1 # starting particles per PE
+NPARTICLES=5 # starting particles per PE
 NNUCLIDES=5 # this is the number of nuclides per PE in a row (e.g., total nuclides = WIDTH * NNUCLIDES)
 NGRIDPOINTS=50 # Number of gridpoints per PE (e.g., the number of gridpoints in that energy band)
 NXS=5 # Number of XS lookups. Should always be 5.

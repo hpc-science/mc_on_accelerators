@@ -73,9 +73,9 @@ var pe_col: i16;
 
 param particle_buffer_multiplier: u16;
 
-var enable_diffusion : bool = true;
-const use_rng_interp: bool = true;
-const use_dsd_interp: bool = true;
+var enable_diffusion : bool = false;
+const use_rng_interp: bool = false;
+const use_dsd_interp: bool = false;
 const use_fc: bool = true;
 
 // Scalars (represented as 1 length arrays, to allow for DSD creation)
@@ -288,30 +288,36 @@ var round_robin_comm_iter : i16 = 0;
 // Macroscopic XS lookup function. Accumulates macro XS data for
 // n_starting_particles_per_pe over all nuclides.
 fn calculate_xs() void {
-  var p: i16 = 0;
-  while (p < @as(i16,current_n_particles_in[0])) : (p += 1) {
+  //var p: i16 = 0;
+  for (@range(i16, @as(i16, current_n_particles_in[0]))) |p| {
+  //while (p < @as(i16,current_n_particles_in[0])) : (p += 1) {
 
     // Particles are stored as structs of energy + 5 xs data points, with structs contiguous in memory to form the array
     // Thus, energy elements are stored as the first entry in the struct, so have a stride of 1 + n_xs (i.e., par_sz)
-    var p_offset: i16 = p*par_sz;
+    const p_offset: i16 = p*par_sz;
+    const p_offset_i16: i16 = p_offset*2;
     var particle_in_i16_ptr = @ptrcast([*] i16, &particle_in);
-    var e: f32 = particle_in[p_offset];
-    var n: i16 = 0;
+    const e: f32 = particle_in[p_offset];
+    //var n: i16 = 0;
 
     // If we are using fractional cascading, load in the hints from the particle object
     var hint_lower: i16;
     var hint_upper: i16;
-    var hints: [2] i16;
+    //var hints: [2] i16;
     if( use_fc ) {
         if( round_robin_comm_iter == 1 ) {
           hint_lower = 0;
-          hints[0] = 0;
+          //hints[0] = 0;
           hint_upper = n_gridpoints_per_nuclide - 1;
+          //hints[1] = n_gridpoints_per_nuclide -1;
         } else {
-          var next_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{2} -> particle_in_i16_ptr[i] });
-          next_dsd =     @increment_dsd_offset(next_dsd, p_offset*2, i16);
-          hint_lower = particle_in_i16_ptr[p_offset*2 + next_lower_offset];
-          hint_upper = particle_in_i16_ptr[p_offset*2 + next_upper_offset];
+          //var next_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{2} -> particle_in_i16_ptr[i], .extent = 2 });
+          //next_dsd =     @increment_dsd_offset(next_dsd, p_offset*2, i16);
+          
+          //@mov16(&hints, next_dsd);
+          
+          hint_lower = particle_in_i16_ptr[p_offset_i16 + next_lower_offset];
+          hint_upper = particle_in_i16_ptr[p_offset_i16 + next_upper_offset];
         }
     }
 
@@ -327,6 +333,7 @@ fn calculate_xs() void {
 
         //hint_lower = @as(i16, next_lower[lower_index]);
         //hint_upper = @as(i16, next_upper[lower_index]);
+
         hint_lower = next_lower[lower_index];
         hint_upper = next_upper[lower_index];
 
@@ -385,8 +392,8 @@ fn calculate_xs() void {
 
       // If using FC, store out FC indexing data
       if( use_fc ) {
-        particle_in_i16_ptr[p_offset*2 + next_lower_offset] = hint_lower;
-        particle_in_i16_ptr[p_offset*2 + next_upper_offset] = hint_upper;
+          particle_in_i16_ptr[p_offset_i16 + next_lower_offset] = hint_lower;
+          particle_in_i16_ptr[p_offset_i16 + next_upper_offset] = hint_upper;
       }
 
     } // loop over particles

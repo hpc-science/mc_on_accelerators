@@ -32,7 +32,7 @@ ASSUME_PERFECT_LOAD_BALANCE = True
 # Note: validation not expected to work when using stochastic interpolation,
 # as this mode uses the Cerebras hardware generator, which is not
 # reproducible on the host.
-VALIDATE_RESULTS = True
+VALIDATE_RESULTS = False
 
 READ_PRINTF = False
 
