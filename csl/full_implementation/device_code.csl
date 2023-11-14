@@ -74,8 +74,8 @@ var pe_col: i16;
 param particle_buffer_multiplier: u16;
 
 var enable_diffusion : bool = true;
-const use_rng_interp: bool = false;
-const use_dsd_interp: bool = false;
+const use_rng_interp: bool = true;
+const use_dsd_interp: bool = true;
 const use_fc: bool = true;
 
 // Scalars (represented as 1 length arrays, to allow for DSD creation)
@@ -358,13 +358,20 @@ fn calculate_xs() void {
         }
         //hint_lower = @as(i16, next_lower[lower_index]);
         //hint_upper = @as(i16, next_upper[lower_index]);
+        hint_lower = next_lower[lower_index];
+        hint_upper = next_upper[lower_index];
+        
+        //hint_lower = next_lower[lower_index] % n_gridpoints_per_nuclide;
+        //hint_upper = next_upper[lower_index] % n_gridpoints_per_nuclide;
+        
         // TODO: Do this modulus on the host-side once, rather than every time here
-        hint_lower = next_lower[lower_index] % n_gridpoints_per_nuclide;
-        if (lower_index >= n_gridpoints_per_nuclide - 2) {
-          hint_upper = n_gridpoints_per_nuclide - 1;
-        } else {
-          hint_upper = next_upper[lower_index] % n_gridpoints_per_nuclide;
-        }
+        //hint_lower = next_lower[lower_index] % n_gridpoints_per_nuclide;
+        //if (lower_index >= n_gridpoints_per_nuclide - 2) {
+        //  hint_upper = n_gridpoints_per_nuclide - 1;
+        //} else {
+        //  hint_upper = next_upper[lower_index] % n_gridpoints_per_nuclide;
+        //}
+
         // OK, so to write it down clearly:
         // 1. The grid is basically wrong due to the way we have duplicated energy grid points at the boundary
         // 2. When building, and we are searching for the upper bound for a given gridpoint, we may search
