@@ -99,8 +99,8 @@ var next_lower: [n_nuclides * n_gridpoints_per_nuclide] i16;
 var next_upper: [n_nuclides * n_gridpoints_per_nuclide] i16;
 
 // Particles are stored contiguously as an energy variable plus five xs points
-const par_sz: i16 = 1 + n_xs;
-const par_szu: u16 = 1 + @as(u16,n_xs);
+const par_sz: i16 = 2 + n_xs;
+const par_szu: u16 = 2 + @as(u16,n_xs);
 const particle_len: i16 = n_starting_particles_per_pe * par_sz;
 const pbl_max_p: u16 = @as(u16, n_starting_particles_per_pe) * particle_buffer_multiplier;
 const pbl: i16 = particle_len * @as(i16, particle_buffer_multiplier); // We define the standard particle buffer as being 3x the starting number

@@ -703,7 +703,7 @@ print_border("Host -> Device Data Migration")
 
 print("Packing particles into contiguous buffer for transfer...")
 # Assemble particles into contiguous storage
-par_struct_sz = n_xs + 1;
+par_struct_sz = n_xs + 2;
 par_len = par_struct_sz * particle_e.size
 particle_contiguous = np.zeros(par_len, dtype=np.float32)
 
