@@ -6,7 +6,6 @@
 param memcpy_params: comptime_struct;
 
 // Color used by memcpy for RPC mechanism
-const LAUNCH: color = @get_color(8);
 const round_robin_row_color: color = @get_color(24);
 const recv_task_color: color = @get_color(25);
 const send_task_color: color = @get_color(15);
@@ -24,9 +23,7 @@ const down_out_callback_color: color = @get_color(13);
 
 // memcpy module provides infrastructure for copying data
 // and launching functions from the host
-const sys_mod = @import_module("<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-  // Color LAUNCH will be used for memcpy's RPC mechanism
-  .LAUNCH = LAUNCH,
+const sys_mod = @import_module("<memcpy/memcpy>", @concat_structs(memcpy_params, .{
   // memcpy_d2h (device to host) call in run.py reads f32 data from y
   .data_type = f32
 }));
@@ -35,8 +32,12 @@ const tsc = @import_module("<time>");
 
 const random = @import_module("<random>");
 
-//const my_trace = @import_module("<debug>", .{.buffer_size = 500});
-const printf = @import_module("<debug>", .{.buffer_size = 500});
+// const times = @import_module("<debug>",
+//                             .{ .key = "times",
+//                                .buffer_size = 500 });
+const printf = @import_module("<debug>",
+                              .{ .key = "trace",
+                                 .buffer_size = 500 });
 const layout_module = @import_module("<layout>");
 
 
@@ -328,7 +329,7 @@ fn calculate_xs() void {
   timestamps[8] = stop[2];
 
   // Stop simulator-only debug timer
-  //my_trace.trace_timestamp();
+  //times.trace_timestamp();
   
   // Copy particles from particles_in buffer to particle_finished buffer
   particle_finished_dsd = @set_dsd_length(particle_finished_dsd, current_n_particles_in[0] * par_szu);
@@ -762,7 +763,7 @@ fn start_simulation() void {
   tsc.get_timestamp(&start);
 
   // Start simulator-only debug timer
-  //my_trace.trace_timestamp();
+  //times.trace_timestamp();
 
   // If we wanted to skip the sorting step (e.g., if we had pre-sorted
   // particles on the host), then we could just launch the round-robin
@@ -987,7 +988,7 @@ task sort_column() void {
     current_n_particles_in[0] = n_claimed;
 
     // Set timer with simulator timer
-    //my_trace.trace_timestamp();
+    //times.trace_timestamp();
 	
     // Set timer with hardware counter timer
     tsc.get_timestamp(&mid);
@@ -1121,6 +1122,6 @@ comptime {
   // Export function so it is host-callable by RPC mechanism
   @export_symbol(start_simulation);
 
-  // Create RPC server using color LAUNCH
-  @rpc(LAUNCH);
+  // Create RPC server using color from memcpy module LAUNCH
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }
