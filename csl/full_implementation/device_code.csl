@@ -76,7 +76,7 @@ param particle_buffer_multiplier: u16;
 var enable_diffusion : bool = true;
 const use_rng_interp: bool = true;
 const use_dsd_interp: bool = true;
-const use_fc: bool = false;
+const use_fc: bool = true;
 
 // Scalars (represented as 1 length arrays, to allow for DSD creation)
 // Representing the number of current particles in the input/output comms buffers
@@ -301,11 +301,15 @@ fn calculate_xs() void {
     // If we are using fractional cascading, load in the hints from the particle object
     var hint_lower: i16;
     var hint_upper: i16;
+    var hints: [2] i16;
     if( use_fc ) {
         if( round_robin_comm_iter == 1 ) {
           hint_lower = 0;
+          hints[0] = 0;
           hint_upper = n_gridpoints_per_nuclide - 1;
         } else {
+          var next_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{2} -> particle_in_i16_ptr[i] });
+          next_dsd =     @increment_dsd_offset(next_dsd, p_offset*2, i16);
           hint_lower = particle_in_i16_ptr[p_offset*2 + next_lower_offset];
           hint_upper = particle_in_i16_ptr[p_offset*2 + next_upper_offset];
         }

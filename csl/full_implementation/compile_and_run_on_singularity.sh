@@ -9,13 +9,13 @@ set -xe
 
 # Define PE grid dimensions
 WIDTH=1 # The width also affects the number of nuclides. E.g., total nuclides = WIDTH * NNUCLIDES)
-HEIGHT=20
+HEIGHT=1
 
 # Define Cross Section lookup parameters
-NPARTICLES=5 # starting particles per PE
+NPARTICLES=1 # starting particles per PE
 NNUCLIDES=5 # this is the number of nuclides per PE in a row (e.g., total nuclides = WIDTH * NNUCLIDES)
-NGRIDPOINTS=100 # Number of gridpoints per PE (e.g., the number of gridpoints in that energy band)
-NXS=1 # Number of XS lookups. Should always be 5.
+NGRIDPOINTS=50 # Number of gridpoints per PE (e.g., the number of gridpoints in that energy band)
+NXS=5 # Number of XS lookups. Should always be 5.
 
 TILE_WIDTH=1
 TILE_HEIGHT=1
@@ -26,7 +26,7 @@ TILE_HEIGHT=1
 # of "1" indicates that perfect load balancing is applied, while a value of
 # e.g., "5" means that a single PE has room to store 5x more particles than it
 # started with.
-PARTICLE_BUFFER_MULTIPLIER=3
+PARTICLE_BUFFER_MULTIPLIER=1
 
 MODE=singularity
 
