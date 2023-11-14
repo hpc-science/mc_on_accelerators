@@ -21,16 +21,18 @@ const C5: color = @get_color(5);
 const C6: color = @get_color(6);
 const C7: color = @get_color(7);
 const C8: color = @get_color(8);
-const C9: color = @get_color(9);
+
+const LAUNCH: color = @get_color(9);
 
 const ENTRY_REDUCE_1: color = @get_color(11);
 const ENTRY_REDUCE_2: color = @get_color(12);
 const ENTRY_REDUCE_3: color = @get_color(13);
 const ENTRY_REDUCE_4: color = @get_color(14);
 
-const memcpy = @import_module("<memcpy_multi/get_params>", .{
+const memcpy = @import_module("<memcpy/get_params>", .{
   .width = width,
-  .height = height
+  .height = height,
+  .LAUNCH = LAUNCH
 });
 
 const reduce = @import_module("allreduce/layout.csl", .{

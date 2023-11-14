@@ -366,7 +366,7 @@ var fab_recv_wdsd =  @get_dsd(fabin_dsd, .{
 ////////////////////////////////////////////////////////////////////////////////
 
 
-const switches = @import_module("<memcpy_multi/memcpy_switches>");
+const switches = @import_module("<memcpy/memcpy_switches>");
 
 // The following arrays define values for control wavelets, which update the
 // switch position at the recipient PEs.
