@@ -102,6 +102,8 @@ var next_upper: [n_nuclides * n_gridpoints_per_nuclide] i16;
 const par_sz: i16 = 2 + n_xs;
 const par_szu: u16 = 2 + @as(u16,n_xs);
 const particle_len: i16 = n_starting_particles_per_pe * par_sz;
+const next_lower_offset: i16 = par_sz * 2 - 2;
+const next_upper_offset: i16 = next_lower_offset + 1;
 const pbl_max_p: u16 = @as(u16, n_starting_particles_per_pe) * particle_buffer_multiplier;
 const pbl: i16 = particle_len * @as(i16, particle_buffer_multiplier); // We define the standard particle buffer as being 3x the starting number
 var particle_in = @zeros([pbl] f32); // Incoming particles from the left (also what the XS lookup kernel operates on)
@@ -130,6 +132,7 @@ var out_dsd = @get_dsd(fabout_dsd, .{
 
 // Pointer handles for host <-> device memcpy data transfers
 var particle_in_ptr: [*] f32          = &particle_in;
+var particle_in_i16_ptr = @ptrcast(i16*, particle_in_ptr);
 var nuclide_energy_grids_ptr: [*] f32 = &nuclide_energy_grids;
 var nuclide_xs_data_ptr: [*] f32      = &nuclide_xs_data;
 var densities_ptr: [*] f32            = &densities;
