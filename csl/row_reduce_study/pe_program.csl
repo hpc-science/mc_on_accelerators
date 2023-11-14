@@ -10,6 +10,8 @@ param N_GRID_POINTS_PER_NUCLIDE: i16;
 
 const BATCH_SIZE : i16 = N_PARTICLES / N_PARTICLE_BATCHES;
 
+const STEP_DONE : local_task_id = @get_local_task_id(1);
+
 const times = @import_module("<debug>",
                              .{ .key = "times",
                                 .buffer_size = 100});
@@ -131,10 +133,15 @@ fn compute() void {
 fn reduce_compute_step(b : i16) void {
   var P_sub_ptr: *[N_XS * BATCH_SIZE]f32;
 
+  // must be unblocked and activated to run the f_step_done task, which
+  // will check batch and either run next step or trigger exit
+  @block(STEP_DONE);
+
   // launch reduce for current batch
   // sum result to right-most PE, current particle only
   P_sub_ptr = @ptrcast(*[N_XS * BATCH_SIZE]f32, &Pxs[b * BATCH_SIZE * N_XS]);
   tsc.get_timestamp(@ptrcast(*[3]u16, &ts_reducestart[3 * current_batch]));
+  // will unblock STEP_DONE when complete
   reduce_mod.rowreduce(N_XS * BATCH_SIZE, P_sub_ptr);
 
   // concurrently launch xs lookup for next batch, unless we
@@ -144,23 +151,29 @@ fn reduce_compute_step(b : i16) void {
     particle_xs_lookup(b + 1);
     tsc.get_timestamp(@ptrcast(*[3]u16, &ts_xsdone[3 * (current_batch + 1)]));
   }
+  @activate(STEP_DONE);
 }
 
 fn reduce_done() void {
   tsc.get_timestamp(@ptrcast(*[3]u16, &ts_reducedone[3 * current_batch]));
   //times.trace_timestamp();
+  @unblock(STEP_DONE);
+}
+
+task f_step_done() void {
   current_batch += 1;
   if (current_batch >= N_PARTICLE_BATCHES) {
     times.trace_timestamp();
     tsc.get_timestamp(&ts_done);
     sys_mod.unblock_cmd_stream();
   } else {
-    // TODO: wait for previous xs lookup to finish
     reduce_compute_step(current_batch);
   }
 }
 
 comptime {
+  @bind_local_task(f_step_done, STEP_DONE);
+
   @export_symbol(P_ptr, "P");
   @export_symbol(Pxs_ptr, "Pxs");
   @export_symbol(D_ptr, "D");
