@@ -14,7 +14,7 @@ HEIGHT=10
 # Define Cross Section lookup parameters
 NPARTICLES=10 # starting particles per PE
 NNUCLIDES=5 # this is the number of nuclides per PE in a row (e.g., total nuclides = WIDTH * NNUCLIDES)
-NGRIDPOINTS=10 # Number of gridpoints per PE (e.g., the number of gridpoints in that energy band)
+NGRIDPOINTS=100 # Number of gridpoints per PE (e.g., the number of gridpoints in that energy band)
 NXS=1 # Number of XS lookups. Should always be 5.
 
 TILE_WIDTH=1

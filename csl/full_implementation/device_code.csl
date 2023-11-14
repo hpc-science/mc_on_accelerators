@@ -36,7 +36,7 @@ const tsc = @import_module("<time>");
 const random = @import_module("<random>");
 
 //const my_trace = @import_module("<debug>", .{.buffer_size = 500});
-const printf = @import_module("<debug>", .{.buffer_size = 5000});
+//const printf = @import_module("<debug>", .{.buffer_size = 5000});
 //const my_trace = @import_module("<debug>", .{.buffer_size = 5000});
 const layout_module = @import_module("<layout>");
 
@@ -316,18 +316,18 @@ fn calculate_xs() void {
           //printf.trace(n * n_gridpoints_per_nuclide + hint_upper + 1);
           const base: i16 = n * n_gridpoints_per_nuclide;
           lower_index = iterative_binary_search(e, base + hint_lower, base + hint_upper + 1);
-      var e_lower  : f32 = nuclide_energy_grids[lower_index];
-      var e_higher : f32 = nuclide_energy_grids[lower_index + 1];
-      if( e > e_higher) {
-        printf.trace_string("energy greater than higher (e, e_low, e_high)");
-        printf.trace(e);
-        printf.trace(e_lower);
-        printf.trace(e_higher);
-        printf.trace_string("hint base/low/high");
-        printf.trace(base);
-        printf.trace(hint_lower);
-        printf.trace(hint_upper+1);
-      }
+      //var e_lower  : f32 = nuclide_energy_grids[lower_index];
+      //var e_higher : f32 = nuclide_energy_grids[lower_index + 1];
+      //if( e > e_higher) {
+      //  printf.trace_string("energy greater than higher (e, e_low, e_high)");
+      //  printf.trace(e);
+      //  printf.trace(e_lower);
+      //  printf.trace(e_higher);
+      //  printf.trace_string("hint base/low/high");
+      //  printf.trace(base);
+      //  printf.trace(hint_lower);
+      //  printf.trace(hint_upper+1);
+      //}
           //lower_index = 0;
           //lower_index = sequential_search(e, base + hint_lower, base + hint_upper + 1);
           //lower_index = sequential_search_unbounded(e, base + hint_lower);
@@ -360,7 +360,7 @@ fn calculate_xs() void {
         //hint_upper = @as(i16, next_upper[lower_index]);
         // TODO: Do this modulus on the host-side once, rather than every time here
         hint_lower = next_lower[lower_index] % n_gridpoints_per_nuclide;
-        if (lower_index >- n_gridpoints_per_nuclide - 2) {
+        if (lower_index >= n_gridpoints_per_nuclide - 2) {
           hint_upper = n_gridpoints_per_nuclide - 1;
         } else {
           hint_upper = next_upper[lower_index] % n_gridpoints_per_nuclide;
@@ -388,21 +388,21 @@ fn calculate_xs() void {
       var e_lower  : f32 = nuclide_energy_grids[lower_index];
       var e_higher : f32 = nuclide_energy_grids[lower_index + 1];
           
-      if( e == e_lower ){
-        printf.trace_string("same as lower");
-      }
-      if( e == e_higher) {
-        printf.trace_string("same as higher");
-      }
-      if( e > e_higher) {
-        printf.trace_string("energy greater than higher (e, e_low, e_high)");
-        printf.trace(e);
-        printf.trace(e_lower);
-        printf.trace(e_higher);
-      }
-      if( e < e_lower) {
-        printf.trace_string("energy less than lower");
-      }
+      //if( e == e_lower ){
+      //  printf.trace_string("same as lower");
+      //}
+      //if( e == e_higher) {
+      //  printf.trace_string("same as higher");
+      //}
+      //if( e > e_higher) {
+      //  printf.trace_string("energy greater than higher (e, e_low, e_high)");
+      //  printf.trace(e);
+      //  printf.trace(e_lower);
+      //  printf.trace(e_higher);
+      //}
+      //if( e < e_lower) {
+      //  printf.trace_string("energy less than lower");
+      //}
 
       var f: f32;
 

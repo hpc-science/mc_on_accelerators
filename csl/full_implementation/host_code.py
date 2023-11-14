@@ -34,7 +34,7 @@ ASSUME_PERFECT_LOAD_BALANCE = True
 # reproducible on the host.
 VALIDATE_RESULTS = True
 
-READ_PRINTF = True
+READ_PRINTF = False
 
 READ_TIMESTAMPS = False
 
