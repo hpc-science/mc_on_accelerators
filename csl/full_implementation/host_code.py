@@ -27,14 +27,14 @@ class Particle:
 # random, with particles needing to move around, but the difference
 # is that when this value is (true), we have fixed the sampling
 # such that particles will end up with an even distribution.
-ASSUME_PERFECT_LOAD_BALANCE = False
+ASSUME_PERFECT_LOAD_BALANCE = True
 
 # Note: validation not expected to work when using stochastic interpolation,
 # as this mode uses the Cerebras hardware generator, which is not
 # reproducible on the host.
 VALIDATE_RESULTS = True
 
-READ_PRINTF = False
+READ_PRINTF = True
 
 READ_TIMESTAMPS = False
 
@@ -374,13 +374,18 @@ def init_fc(nuclide_energy_grids, n_nuclides, n_gridpoints_per_nuclide, width, h
 
             # Find the upper bound
             ub = 0
-            if ub < n_gridpoints_per_nuclide - 1 :
+            if e < n_gridpoints_per_nuclide - 1 :
                 low = n_right*n_gridpoints_per_nuclide
                 high = low + n_gridpoints_per_nuclide
                 ub = iterative_binary_search_upper(nuclide_energy_grids[low:high], e_u)
             else:
                 ub = n_gridpoints_per_nuclide -1;
 
+            if ub >= n_gridpoints_per_nuclide:
+                print("ERROR UB TOO BIG")
+            if ub <= lb:
+                print("ERROR UB TOO SMALL")
+                exit(1)
             next_upper[n*n_gridpoints_per_nuclide + e] = ub
 
     return next_lower.astype(np.int16), next_upper.astype(np.int16)
@@ -623,7 +628,7 @@ print("Initializing XS data on host...")
 # Convert things to 2D/3D nicely
 nuclide_energy_grids, nuclide_xs_data, densities = init_xs_data_unique(n_nuclides, n_gridpoints_per_nuclide, n_xs, width, height)
 neg_2D = np.reshape(nuclide_energy_grids, (n_nuclides * width, n_gridpoints_per_nuclide * height))
-
+print(neg_2D)
 next_lower, next_upper = init_fc(nuclide_energy_grids, n_nuclides, n_gridpoints_per_nuclide, width, height)
 #print(next_lower)
 #print(next_upper)
@@ -655,12 +660,13 @@ if VALIDATE_RESULTS:
     print("Computing reference solution on host...")
     particle_xs_expected = calculate_xs_reference(n_starting_particles_per_pe*width*height, n_nuclides*width, n_gridpoints_per_nuclide*height, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height)
     
-    #particle_xs_expected_fc = calculate_xs_reference_fc(n_starting_particles_per_pe*width*height, n_nuclides*width, n_gridpoints_per_nuclide*height, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height, next_lower, next_upper)
+    particle_xs_expected_fc = calculate_xs_reference_fc(n_starting_particles_per_pe*width*height, n_nuclides*width, n_gridpoints_per_nuclide*height, n_xs, nuclide_energy_grids, nuclide_xs_data, densities, particle_e, width, height, next_lower, next_upper)
 
-    #print("REFERENCE SOLUTION")
-    #print(particle_xs_expected)
-    #print("FC SOLUTION")
-    #print(particle_xs_expected_fc)
+    print("REFERENCE SOLUTION")
+    print(particle_xs_expected)
+    print("FC SOLUTION")
+    print(particle_xs_expected_fc)
+    np.testing.assert_allclose(particle_xs_expected, particle_xs_expected_fc, atol=0.01, rtol=0)
 
     # Build reference particle objects, and sort them in energy for later comparison to CS2 solution
     for p in range(particle_e.size):
