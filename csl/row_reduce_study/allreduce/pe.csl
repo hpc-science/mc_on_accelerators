@@ -90,14 +90,14 @@
 
 param C_ROUTE: color;
 
-param C_SEND_CTRL: color;  // send switch advance
-param C_SEND_DATA: color;  // send data
-param C_STATE_ENTRY: color; // state machine
+param C_SEND_CTRL: local_task_id;  // send switch advance
+param C_SEND_DATA: local_task_id;  // send data
+param C_STATE_ENTRY: local_task_id; // state machine
 // LOCK runs only if teardown is received and the operation is done
 // LOCK performs the state transition
 // teardown handler activates LOCK
 // the operation blocks LOCK in the beginning and unblocks it when it finishes
-param C_LOCK: color;
+param C_LOCK: local_task_id;
 
 param first_px: bool; // (0 == px)
 param last_px: bool;  // ((width-1) == px)
@@ -238,7 +238,7 @@ fn rowreduce( n: i16, in_tensor: *[MAX_ZDIM]f32 ) void {
 // ref: monolith/src/ucode/kernels/lib/pe_addr_map_ein.casm
 // const TAMAP_FAB_TRAFFIC_MAP_START_ADDR = 0x7f20
 const TAMAP_FAB_MAP_START_ADDR : u16 = 0x7f20;
-const D2H_COLOR_CONFIG_ADDR : u16 = TAMAP_FAB_MAP_START_ADDR + @get_color_id(C_ROUTE);
+const D2H_COLOR_CONFIG_ADDR : u16 = TAMAP_FAB_MAP_START_ADDR + @get_int(C_ROUTE);
 
 // mask out bit 0:9, including input/output pos0
 // keep bit 10:15, including
@@ -280,7 +280,7 @@ const INPUT_RAMP: u16  = 0x200; // bit 9: onramp input mask
 // ref: monolith/src/ucode/kernels/lib/pe_addr_map_fyn.casm
 // .const TAMAP_FAB_SWITCH_CFG_START_ADDR = 0x7f40
 const TAMAP_FAB_SWITCH_CFG_START_ADDR: u16 = 0x7f40;
-const D2H_SWITCH_CONFIG_ADDR: u16 = TAMAP_FAB_SWITCH_CFG_START_ADDR + @get_color_id(C_ROUTE);
+const D2H_SWITCH_CONFIG_ADDR: u16 = TAMAP_FAB_SWITCH_CFG_START_ADDR + @get_int(C_ROUTE);
 // mask bits 14:13
 // masking with MASK_SWITCH_RESET_POS0 is equivalent to set bits14:13 to zero (i.e. back to pos0)
 const MASK_SWITCH_RESET_POS0: u16 = 0x9fff;
@@ -586,10 +586,10 @@ task f_lock() void {
 comptime {
     // last PE uses a microthread to receive data
     @block(C_ROUTE);
-    @bind_task( f_send_ctrl, C_SEND_CTRL);
-    @bind_task( f_send_data, C_SEND_DATA);
-    @bind_task( f_state_entry, C_STATE_ENTRY);
-    @bind_task( f_lock, C_LOCK);
+    @bind_local_task( f_send_ctrl, C_SEND_CTRL);
+    @bind_local_task( f_send_data, C_SEND_DATA);
+    @bind_local_task( f_state_entry, C_STATE_ENTRY);
+    @bind_local_task( f_lock, C_LOCK);
 }
 
 

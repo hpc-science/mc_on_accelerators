@@ -24,10 +24,10 @@ const C8: color = @get_color(8);
 
 const LAUNCH: color = @get_color(9);
 
-const ENTRY_REDUCE_1: color = @get_color(11);
-const ENTRY_REDUCE_2: color = @get_color(12);
-const ENTRY_REDUCE_3: color = @get_color(13);
-const ENTRY_REDUCE_4: color = @get_color(14);
+const ENTRY_REDUCE_1: local_task_id = @get_local_task_id(2);
+const ENTRY_REDUCE_2: local_task_id = @get_local_task_id(3);
+const ENTRY_REDUCE_3: local_task_id = @get_local_task_id(4);
+const ENTRY_REDUCE_4: local_task_id = @get_local_task_id(5);
 
 const memcpy = @import_module("<memcpy/get_params>", .{
   .width = width,
@@ -37,7 +37,8 @@ const memcpy = @import_module("<memcpy/get_params>", .{
 
 const reduce = @import_module("allreduce/layout.csl", .{
   .colors = [1]color{C8},
-  .entrypoints = [4]color{ENTRY_REDUCE_1, ENTRY_REDUCE_2, ENTRY_REDUCE_3, ENTRY_REDUCE_4},
+  .entrypoints = [4]local_task_id{ ENTRY_REDUCE_1, ENTRY_REDUCE_2,
+                                   ENTRY_REDUCE_3, ENTRY_REDUCE_4 },
   .width = width,
   .height = height
 });
