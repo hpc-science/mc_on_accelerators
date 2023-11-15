@@ -39,11 +39,15 @@ const col_even_send_down_color: color = @get_color(4);
 const col_even_recv_up_color:   color = @get_color(5);
 const col_even_recv_down_color: color = @get_color(6);
 
+const LAUNCH: color = @get_color(8);
+
 // Import memcpy layout module for 2D grid of PEs
 // This module defines parameters passed to program on the single PE
-const memcpy = @import_module("<memcpy_multi/get_params>", .{
+const memcpy = @import_module("<memcpy/get_params>", .{
     .width = width*tile_width,
-    .height = height*tile_height
+    .height = height*tile_height,
+    // Color LAUNCH will be used for memcpy's RPC mechanism
+    .LAUNCH = LAUNCH
     });
 
 // This block is where we define how we want to initialize each PE
