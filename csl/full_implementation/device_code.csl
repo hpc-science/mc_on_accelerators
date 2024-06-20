@@ -5,18 +5,17 @@
 // Struct containing parameters for memcpy layout
 param memcpy_params: comptime_struct;
 
-// Color used by memcpy for RPC mechanism
-const LAUNCH: color = @get_color(8);
-const round_robin_row_color: color = @get_color(24);
-const recv_task_color: color = @get_color(25);
-const send_task_color: color = @get_color(15);
-const sort_task_color: color = @get_color(16);
-const up_in_callback_color: color = @get_color(20);
-const down_in_callback_color: color = @get_color(19);
-const A_go_color: color = @get_color(18);
-const B_go_color: color = @get_color(17);
-const up_out_callback_color:   color = @get_color(14);
-const down_out_callback_color: color = @get_color(13);
+// Task ids used for local synchronization
+const recv_task_id: local_task_id = @get_local_task_id(23);
+const send_task_id: local_task_id = @get_local_task_id(15);
+const up_in_callback_task_id: local_task_id = @get_local_task_id(20);
+const down_in_callback_task_id: local_task_id = @get_local_task_id(19);
+const up_out_callback_task_id: local_task_id = @get_local_task_id(14);
+const down_out_callback_task_id: local_task_id = @get_local_task_id(13);
+const round_robin_row_task_id: local_task_id = @get_local_task_id(22);
+const sort_task_id: local_task_id = @get_local_task_id(16);
+const A_go_task_id: local_task_id = @get_local_task_id(18);
+const B_go_task_id: local_task_id = @get_local_task_id(17);
 
 //const diffuse_color: color = @get_color(10);
 //const diffuse_callback_recv_color: color = @get_color(11);
@@ -24,9 +23,7 @@ const down_out_callback_color: color = @get_color(13);
 
 // memcpy module provides infrastructure for copying data
 // and launching functions from the host
-const sys_mod = @import_module("<memcpy_multi/memcpy>", @concat_structs(memcpy_params, .{
-  // Color LAUNCH will be used for memcpy's RPC mechanism
-  .LAUNCH = LAUNCH,
+const sys_mod = @import_module("<memcpy/memcpy>", @concat_structs(memcpy_params, .{
   // memcpy_d2h (device to host) call in run.py reads f32 data from y
   .data_type = f32
 }));
@@ -35,8 +32,12 @@ const tsc = @import_module("<time>");
 
 const random = @import_module("<random>");
 
-//const my_trace = @import_module("<debug>", .{.buffer_size = 500});
-const printf = @import_module("<debug>", .{.buffer_size = 500});
+// const times = @import_module("<debug>",
+//                             .{ .key = "times",
+//                                .buffer_size = 500 });
+const printf = @import_module("<debug>",
+                              .{ .key = "trace",
+                                 .buffer_size = 500 });
 const layout_module = @import_module("<layout>");
 
 
@@ -328,7 +329,7 @@ fn calculate_xs() void {
   timestamps[8] = stop[2];
 
   // Stop simulator-only debug timer
-  //my_trace.trace_timestamp();
+  //times.trace_timestamp();
   
   // Copy particles from particles_in buffer to particle_finished buffer
   particle_finished_dsd = @set_dsd_length(particle_finished_dsd, current_n_particles_in[0] * par_szu);
@@ -357,9 +358,9 @@ task row_recv() void {
     @load_to_dsr(up_in_dsr, particle_in_dsd);
 
     // Receive particle data
-    @fmovs(up_in_dsr, in_dsd, .{ .async = true, .activate = round_robin_row_color });
+    @fmovs(up_in_dsr, in_dsd, .{ .async = true, .activate = round_robin_row_task_id });
   } else {
-    @activate(round_robin_row_color);
+    @activate(round_robin_row_task_id);
   }
 }
 
@@ -372,9 +373,9 @@ task row_send() void {
     @load_to_dsr(up_out_dsr, particle_out_dsd);
 
     // Transmit particle data
-    @fmovs(out_dsd, up_out_dsr, .{ .async = true, .unblock = round_robin_row_color });
+    @fmovs(out_dsd, up_out_dsr, .{ .async = true, .unblock = round_robin_row_task_id });
   } else {
-    @unblock(round_robin_row_color);
+    @unblock(round_robin_row_task_id);
   }
 }
 
@@ -416,7 +417,7 @@ var round_robin_comm_iter : i16 = 0;
 // One invocation means all particles currently on this PE will have contributions
 // added from all nuclides on this PE, and then will be sent to the right neighbor,
 // and new ones received from the left neighbor. This task is bound on the color
-// "round_robin_row_color".
+// "round_robin_row_task_id".
 //task round_robin_row_fixed() void {
 //  
 //  round_robin_comm_iter +=1 ;
@@ -455,7 +456,7 @@ var round_robin_comm_iter : i16 = 0;
 //  // Block this task's color. The color will be unblocked and activated
 //  // once all particles have been sent/received, thus calling this function
 //  // again and continuing the loop.
-//  @block(round_robin_row_color);
+//  @block(round_robin_row_task_id);
 //  
 //  // Transmit # of particles to the right (just the #, not the particles themselves yet)
 //  // We use DSRs only for the memory buffers (not the fabric DSDs) to improve DSR allocation.
@@ -469,7 +470,7 @@ var round_robin_comm_iter : i16 = 0;
 //    @load_to_dsr(up_out_dsr, particle_out_dsd);
 //
 //    // Transmit particle data
-//    @fmovs(out_dsd, up_out_dsr, .{ .async = true, .unblock = round_robin_row_color });
+//    @fmovs(out_dsd, up_out_dsr, .{ .async = true, .unblock = round_robin_row_task_id });
 //
 //  // When the above mov16 operation completes, it will callback the "row_send" function to
 //  // actually transmit all the actual particles themselves
@@ -484,10 +485,10 @@ var round_robin_comm_iter : i16 = 0;
 //    @load_to_dsr(up_in_dsr, particle_in_dsd);
 //
 //    // Receive particle data
-//    @fmovs(up_in_dsr, in_dsd, .{ .async = true, .activate = round_robin_row_color });
+//    @fmovs(up_in_dsr, in_dsd, .{ .async = true, .activate = round_robin_row_task_id });
 //
 //  // Neither of the mov16 functions above block, so this function will finish.
-//  // It will be called again when the "round_robin_row_color" gets unblocked and activated
+//  // It will be called again when the "round_robin_row_task_id" gets unblocked and activated
 //  // which happens when all particle data has finished exchanges.
 //}
 
@@ -519,7 +520,7 @@ task round_robin_row() void {
       particle_in_dsd =  @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{pbl} -> particle_in[i] });
 
       enable_diffusion = false;
-      @activate(round_robin_row_color);
+      @activate(round_robin_row_task_id);
       return;
     }
 
@@ -590,7 +591,7 @@ task round_robin_row() void {
   // Block this task's color. The color will be unblocked and activated
   // once all particles have been sent/received, thus calling this function
   // again and continuing the loop.
-  @block(round_robin_row_color);
+  @block(round_robin_row_task_id);
   
   // Transmit # of particles to the right (just the #, not the particles themselves yet)
   // We use DSRs only for the memory buffers (not the fabric DSDs) to improve DSR allocation.
@@ -598,7 +599,7 @@ task round_robin_row() void {
   // called if doing that.
   out_dsd = @set_dsd_length(out_dsd, 1);
   @load_to_dsr(up_out_dsr, current_n_particles_out_dsd);
-  @mov16(out_dsd, up_out_dsr, .{ .async = true, .activate = send_task_color });
+  @mov16(out_dsd, up_out_dsr, .{ .async = true, .activate = send_task_id });
 
   // When the above mov16 operation completes, it will callback the "row_send" function to
   // actually transmit all the actual particles themselves
@@ -607,10 +608,10 @@ task round_robin_row() void {
   // as detailed above for sending particles.
   in_dsd = @set_dsd_length(in_dsd, 1);
   @load_to_dsr(up_in_dsr, current_n_particles_in_dsd);
-  @mov16(up_in_dsr, in_dsd, .{.async = true, .activate= recv_task_color} );
+  @mov16(up_in_dsr, in_dsd, .{.async = true, .activate= recv_task_id} );
 
   // Neither of the mov16 functions above block, so this function will finish.
-  // It will be called again when the "round_robin_row_color" gets unblocked and activated
+  // It will be called again when the "round_robin_row_task_id" gets unblocked and activated
   // which happens when all particle data has finished exchanges.
 }
 
@@ -700,7 +701,7 @@ task round_robin_row() void {
 //  @mov16(up_in_dsr, in_dsd, .{.async = true, .activate= diffuse_callback_recv_color} );
 //
 //  // Neither of the mov16 functions above block, so this function will finish.
-//  // It will be called again when the "round_robin_row_color" gets unblocked and activated
+//  // It will be called again when the "round_robin_row_task_id" gets unblocked and activated
 //  // which happens when all particle data has finished exchanges.
 //}
 
@@ -762,7 +763,7 @@ fn start_simulation() void {
   tsc.get_timestamp(&start);
 
   // Start simulator-only debug timer
-  //my_trace.trace_timestamp();
+  //times.trace_timestamp();
 
   // If we wanted to skip the sorting step (e.g., if we had pre-sorted
   // particles on the host), then we could just launch the round-robin
@@ -881,11 +882,11 @@ fn process_energies(p: *[pbl] f32, n: u16) void {
 // on 4 messages (e.g., to send/recv in two directions), then we
 // have to have another level.
 task A_go() void {
-  @unblock(sort_task_color);
+  @unblock(sort_task_id);
 }
 
 task B_go() void {
-  @activate(sort_task_color);
+  @activate(sort_task_id);
 }
   
 // The folllowing 4 functions are all callbacks used for sending and
@@ -899,9 +900,9 @@ task up_in_callback() void {
     fab_up_in_dsd = @set_dsd_length(fab_up_in_dsd, n_up_in[0] * par_szu);
     up_in_dsd     = @set_dsd_length(up_in_dsd,     n_up_in[0] * par_szu);
     @load_to_dsr(up_in_dsr, up_in_dsd);
-    @fmovs(up_in_dsr, fab_up_in_dsd, .{ .async=true, .unblock = B_go_color});
+    @fmovs(up_in_dsr, fab_up_in_dsd, .{ .async=true, .unblock = B_go_task_id});
   } else {
-    @unblock(B_go_color);
+    @unblock(B_go_task_id);
   }
 }
 
@@ -910,9 +911,9 @@ task down_in_callback() void {
     fab_down_in_dsd = @set_dsd_length(fab_down_in_dsd, n_down_in[0] * par_szu);
     down_in_dsd     = @set_dsd_length(down_in_dsd,     n_down_in[0] * par_szu);
     @load_to_dsr(down_in_dsr, down_in_dsd);
-    @fmovs(down_in_dsr, fab_down_in_dsd, .{ .async=true, .activate = B_go_color});
+    @fmovs(down_in_dsr, fab_down_in_dsd, .{ .async=true, .activate = B_go_task_id});
   } else {
-    @activate(B_go_color);
+    @activate(B_go_task_id);
   }
 }
 
@@ -921,9 +922,9 @@ task up_out_callback() void {
     fab_up_out_dsd = @set_dsd_length(fab_up_out_dsd, n_up_out[0] * par_szu);
     up_out_dsd =     @set_dsd_length(up_out_dsd,     n_up_out[0] * par_szu);
     @load_to_dsr(up_out_dsr, up_out_dsd);
-    @fmovs(fab_up_out_dsd, up_out_dsr, .{ .async = true, .unblock = A_go_color });
+    @fmovs(fab_up_out_dsd, up_out_dsr, .{ .async = true, .unblock = A_go_task_id });
   } else {
-    @unblock(A_go_color);
+    @unblock(A_go_task_id);
   }
 }
 
@@ -932,9 +933,9 @@ task down_out_callback() void{
     fab_down_out_dsd = @set_dsd_length(fab_down_out_dsd, n_down_out[0] * par_szu);
     down_out_dsd =     @set_dsd_length(down_out_dsd,     n_down_out[0] * par_szu);
     @load_to_dsr(down_out_dsr, down_out_dsd);
-    @fmovs(fab_down_out_dsd, down_out_dsr, .{ .async = true, .activate = A_go_color });
+    @fmovs(fab_down_out_dsd, down_out_dsr, .{ .async = true, .activate = A_go_task_id });
   } else {
-    @activate(A_go_color);
+    @activate(A_go_task_id);
   }
 }
 
@@ -987,7 +988,7 @@ task sort_column() void {
     current_n_particles_in[0] = n_claimed;
 
     // Set timer with simulator timer
-    //my_trace.trace_timestamp();
+    //times.trace_timestamp();
 	
     // Set timer with hardware counter timer
     tsc.get_timestamp(&mid);
@@ -1014,9 +1015,9 @@ task sort_column() void {
   // a color can only be controlled by one block and one activate, we
   // therefore need to use 3 colors to represent 4 dependencies, as 
   // arranged in a tree structure.
-  @block(sort_task_color);
-  @block(A_go_color);
-  @block(B_go_color);
+  @block(sort_task_id);
+  @block(A_go_task_id);
+  @block(B_go_task_id);
 
   // The following 4 conditional blocks all have the same basic structure.
   // Each one transmits or receives a particle count from the PE above or
@@ -1032,44 +1033,44 @@ task sort_column() void {
     // Transmit # of particles out up
     fab_up_out_dsd = @set_dsd_length(fab_up_out_dsd,1);
     @load_to_dsr(up_out_dsr, n_up_out_dsd);
-    @mov16(fab_up_out_dsd, up_out_dsr, .{ .async = true , .activate = up_out_callback_color });
+    @mov16(fab_up_out_dsd, up_out_dsr, .{ .async = true , .activate = up_out_callback_task_id });
 
     // Transmit particles out up (via call back)
   } else {
-    @unblock(A_go_color);
+    @unblock(A_go_task_id);
   }
   
   if( pe_row < height - 1 ) {
     // Transmit # of particles out down
     fab_down_out_dsd = @set_dsd_length(fab_down_out_dsd,1);
     @load_to_dsr(down_out_dsr, n_down_out_dsd);
-    @mov16(fab_down_out_dsd, down_out_dsr, .{ .async = true, .activate = down_out_callback_color });
+    @mov16(fab_down_out_dsd, down_out_dsr, .{ .async = true, .activate = down_out_callback_task_id });
   
     // Transmit particles out down (via call back)
   } else {
-    @activate(A_go_color);
+    @activate(A_go_task_id);
   }
 
   if (pe_row > 0) {
     // Recv # of particles up
     fab_up_in_dsd = @set_dsd_length(fab_up_in_dsd,1);
     @load_to_dsr(up_in_dsr, n_up_in_dsd);
-    @mov16(up_in_dsr, fab_up_in_dsd, .{ .async = true, .activate = up_in_callback_color });
+    @mov16(up_in_dsr, fab_up_in_dsd, .{ .async = true, .activate = up_in_callback_task_id });
 
     // Recv particles up (via call back)
   } else {
-    @unblock(B_go_color);
+    @unblock(B_go_task_id);
   }
 
   if (pe_row < height - 1 ) {
     // Recv # of particles down
     fab_down_in_dsd = @set_dsd_length(fab_down_in_dsd,1);
     @load_to_dsr(down_in_dsr, n_down_in_dsd);
-    @mov16(down_in_dsr, fab_down_in_dsd, .{ .async = true, .activate = down_in_callback_color });
+    @mov16(down_in_dsr, fab_down_in_dsd, .{ .async = true, .activate = down_in_callback_task_id });
 
     // (B) Recv particles down (via call back)
   } else {
-    @activate(B_go_color);
+    @activate(B_go_task_id);
   }
 }
 
@@ -1079,17 +1080,17 @@ task sort_column() void {
 
 comptime {
 
-  // Binding of tasks to colors
-  @bind_task(round_robin_row, round_robin_row_color);
-  @bind_task(row_recv, recv_task_color);
-  @bind_task(row_send, send_task_color);
-  @bind_task(A_go, A_go_color);
-  @bind_task(B_go, B_go_color);
-  @bind_task(sort_column, sort_task_color);
-  @bind_task(up_out_callback,   up_out_callback_color);
-  @bind_task(down_out_callback, down_out_callback_color);
-  @bind_task(up_in_callback,    up_in_callback_color);
-  @bind_task(down_in_callback,  down_in_callback_color);
+  // Binding of tasks to local task ids
+  @bind_local_task(row_recv, recv_task_id);
+  @bind_local_task(row_send, send_task_id);
+  @bind_local_task(round_robin_row, round_robin_row_task_id);
+  @bind_local_task(A_go, A_go_task_id);
+  @bind_local_task(B_go, B_go_task_id);
+  @bind_local_task(sort_column, sort_task_id);
+  @bind_local_task(up_out_callback,   up_out_callback_task_id);
+  @bind_local_task(down_out_callback, down_out_callback_task_id);
+  @bind_local_task(up_in_callback,    up_in_callback_task_id);
+  @bind_local_task(down_in_callback,  down_in_callback_task_id);
   
   //@bind_task(diffuse, diffuse_color);
   //@bind_task(diffuse_row_recv, diffuse_callback_recv_color);
@@ -1121,6 +1122,6 @@ comptime {
   // Export function so it is host-callable by RPC mechanism
   @export_symbol(start_simulation);
 
-  // Create RPC server using color LAUNCH
-  @rpc(LAUNCH);
+  // Create RPC server using color from memcpy module LAUNCH
+  @rpc(@get_data_task_id(sys_mod.LAUNCH));
 }
